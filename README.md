@@ -4,6 +4,18 @@ CheckinPilot is a local-first Chrome extension for daily check-ins on compatible
 
 > Status: early `v0.1.0-rc` development. The verified integration target is `https://runanytime.hxi.me`. Do not publish a stable `v0.1.0` until the real scheduled-run acceptance gate in `docs/acceptance-v0.1.md` has passed.
 
+## Quick start for users (no build required)
+
+CheckinPilot is not yet published in the Chrome Web Store. To use it without downloading the source code or installing developer tools:
+
+1. Open [GitHub Releases](https://github.com/Auroraee/checkin-pilot/releases) and download the newest `checkin-pilot-*-chrome.zip` file.
+2. Extract the downloaded ZIP file to a folder that you will keep. Do not delete that folder while the extension is installed.
+3. Open `chrome://extensions` in Chrome and turn on **Developer mode**.
+4. Select **Load unpacked**, then choose the extracted folder that contains `manifest.json`.
+5. Sign in to a supported API panel in Chrome, open CheckinPilot, and add the current site. Approve the one-site permission prompt, choose a daily time, and enable the schedule.
+
+Keep Chrome running at the scheduled time. CheckinPilot uses your existing browser session, stores its settings and redacted history locally, and never asks you to paste a password, cookie, bearer token, dashboard token, or API key. Missed days are not backfilled. The only verified site in this release candidate is `https://runanytime.hxi.me`.
+
 ## Safety model
 
 - No backend, analytics, telemetry, password storage, copied cookies, bearer tokens, dashboard tokens, or API keys.
