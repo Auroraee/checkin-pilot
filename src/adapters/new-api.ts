@@ -1,0 +1,275 @@
+import type {
+  NormalizedOutcome,
+  PowMode,
+  SiteCapabilities,
+} from '../shared/domain';
+import {
+  actionRequiredOutcome,
+  failedOutcome,
+  getApiMessage,
+  isApiSuccess,
+  isHtmlResponse,
+  isRecord,
+  outcomeFromApiFailure,
+  outcomeFromHttpStatus,
+  outcomeFromThrown,
+  readJsonObject,
+  sanitizeReward,
+} from './http';
+import type {
+  AdapterOperationResult,
+  CheckinStatus,
+  FetchLike,
+  PublicSiteStatus,
+} from './types';
+
+export interface NewApiRequestContext {
+  origin: string;
+  userId: number;
+  month?: string;
+  fetch?: FetchLike;
+  signal?: AbortSignal;
+}
+
+export interface CheckinSubmitOptions {
+  powChallenge?: string;
+  powNonce?: string;
+}
+
+export function currentLocalMonth(now = new Date()): string {
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  return `${year}-${month}`;
+}
+
+export async function fetchPublicStatus(
+  context: NewApiRequestContext,
+): Promise<AdapterOperationResult<PublicSiteStatus>> {
+  const request = getRequestParts(context);
+  if (!request.ok) return request;
+
+  try {
+    const response = await request.fetch(
+      new URL('/api/status', request.origin),
+      requestInit('GET', context.signal, false),
+    );
+    const httpFailure = outcomeFromHttpStatus(response);
+    if (httpFailure !== undefined) return { ok: false, outcome: httpFailure };
+    if (isHtmlResponse(response)) {
+      return {
+        ok: false,
+        outcome: actionRequiredOutcome('sign_in', 'auth_failed'),
+      };
+    }
+    const payload = await readJsonObject(response);
+    if (payload === undefined || !isApiSuccess(payload)) {
+      return { ok: false, outcome: failedOutcome('unsupported_protocol') };
+    }
+    const data = isRecord(payload.data) ? payload.data : undefined;
+    if (data === undefined || typeof data.checkin_enabled !== 'boolean') {
+      return { ok: false, outcome: failedOutcome('unsupported_protocol') };
+    }
+
+    const powMode = parsePowMode(data.pow_mode);
+    return {
+      ok: true,
+      value: {
+        checkinEnabled: data.checkin_enabled,
+        turnstileCheck: data.turnstile_check === true,
+        powEnabled: data.pow_enabled === true,
+        powMode,
+      },
+    };
+  } catch (error) {
+    return { ok: false, outcome: outcomeFromThrown(error, context.signal) };
+  }
+}
+
+export async function getCheckinStatus(
+  context: NewApiRequestContext,
+): Promise<AdapterOperationResult<CheckinStatus>> {
+  const request = getRequestParts(context);
+  if (!request.ok) return request;
+  const month = context.month ?? currentLocalMonth();
+  if (!/^\d{4}-(?:0[1-9]|1[0-2])$/.test(month)) {
+    return { ok: false, outcome: failedOutcome('invalid_response') };
+  }
+
+  const url = new URL('/api/user/checkin', request.origin);
+  url.searchParams.set('month', month);
+  try {
+    const response = await request.fetch(
+      url,
+      requestInit('GET', context.signal, true, request.userId),
+    );
+    const httpFailure = outcomeFromHttpStatus(response);
+    if (httpFailure !== undefined) return { ok: false, outcome: httpFailure };
+    if (isHtmlResponse(response)) {
+      return {
+        ok: false,
+        outcome: actionRequiredOutcome('sign_in', 'auth_failed'),
+      };
+    }
+    const payload = await readJsonObject(response);
+    if (payload === undefined) {
+      return { ok: false, outcome: failedOutcome('invalid_response') };
+    }
+    if (!isApiSuccess(payload)) {
+      const outcome = outcomeFromApiFailure(getApiMessage(payload));
+      if (outcome.code === 'already_checked') {
+        return { ok: true, value: { checkedInToday: true } };
+      }
+      return { ok: false, outcome };
+    }
+
+    const data = isRecord(payload.data) ? payload.data : undefined;
+    const stats = data !== undefined && isRecord(data.stats) ? data.stats : undefined;
+    if (stats === undefined || typeof stats.checked_in_today !== 'boolean') {
+      return { ok: false, outcome: failedOutcome('invalid_response') };
+    }
+    return {
+      ok: true,
+      value: { checkedInToday: stats.checked_in_today },
+    };
+  } catch (error) {
+    return { ok: false, outcome: outcomeFromThrown(error, context.signal) };
+  }
+}
+
+export async function postCheckin(
+  context: NewApiRequestContext,
+  options: CheckinSubmitOptions = {},
+): Promise<NormalizedOutcome> {
+  const request = getRequestParts(context);
+  if (!request.ok) return request.outcome;
+
+  const url = new URL('/api/user/checkin', request.origin);
+  if (options.powChallenge !== undefined) {
+    url.searchParams.set('pow_challenge', options.powChallenge);
+  }
+  if (options.powNonce !== undefined) {
+    url.searchParams.set('pow_nonce', options.powNonce);
+  }
+
+  try {
+    const response = await request.fetch(
+      url,
+      requestInit('POST', context.signal, true, request.userId),
+    );
+    const httpFailure = outcomeFromHttpStatus(response);
+    if (httpFailure !== undefined) return httpFailure;
+    if (isHtmlResponse(response)) {
+      return actionRequiredOutcome('sign_in', 'auth_failed');
+    }
+    const payload = await readJsonObject(response);
+    if (payload === undefined) return failedOutcome('invalid_response');
+    if (!isApiSuccess(payload)) return outcomeFromApiFailure(getApiMessage(payload));
+
+    const outcome: NormalizedOutcome = { code: 'success', retryable: false };
+    const reward = extractReward(payload.data);
+    if (reward !== undefined) outcome.reward = reward;
+    return outcome;
+  } catch (error) {
+    return outcomeFromThrown(error, context.signal);
+  }
+}
+
+export async function runNewApiCheckin(
+  context: NewApiRequestContext,
+): Promise<NormalizedOutcome> {
+  const publicStatus = await fetchPublicStatus(context);
+  if (!publicStatus.ok) return publicStatus.outcome;
+  if (!publicStatus.value.checkinEnabled) {
+    return { code: 'unsupported', errorCode: 'unsupported_protocol', retryable: false };
+  }
+
+  const current = await getCheckinStatus(context);
+  if (!current.ok) return current.outcome;
+  if (current.value.checkedInToday) {
+    return { code: 'already_checked', retryable: false };
+  }
+
+  if (publicStatus.value.powEnabled) {
+    return actionRequiredOutcome('unknown_challenge', 'unsupported_protocol');
+  }
+  if (publicStatus.value.turnstileCheck) {
+    return actionRequiredOutcome('turnstile');
+  }
+  return postCheckin(context);
+}
+
+export function capabilitiesFromStatus(status: PublicSiteStatus): SiteCapabilities {
+  const capabilities: SiteCapabilities = {
+    checkin: status.checkinEnabled,
+    statusEndpoint: true,
+  };
+  if (status.powEnabled) {
+    capabilities.pow = {
+      enabled: true,
+      mode: status.powMode,
+      turnstileCheck: status.turnstileCheck,
+    };
+  }
+  return capabilities;
+}
+
+function getRequestParts(
+  context: NewApiRequestContext,
+):
+  | { ok: true; origin: string; userId: number; fetch: FetchLike }
+  | { ok: false; outcome: NormalizedOutcome } {
+  if (!Number.isSafeInteger(context.userId) || context.userId <= 0) {
+    return { ok: false, outcome: actionRequiredOutcome('rebind_required', 'auth_failed') };
+  }
+  try {
+    const parsed = new URL(context.origin);
+    if (parsed.protocol !== 'https:' || parsed.origin !== context.origin) {
+      return { ok: false, outcome: failedOutcome('unsupported_protocol') };
+    }
+    return {
+      ok: true,
+      origin: parsed.origin,
+      userId: context.userId,
+      fetch: context.fetch ?? globalThis.fetch.bind(globalThis),
+    };
+  } catch {
+    return { ok: false, outcome: failedOutcome('unsupported_protocol') };
+  }
+}
+
+function requestInit(
+  method: 'GET' | 'POST',
+  signal: AbortSignal | undefined,
+  authenticated: boolean,
+  userId?: number,
+): RequestInit {
+  const headers = new Headers({ Accept: 'application/json' });
+  if (authenticated && userId !== undefined) {
+    headers.set('New-Api-User', String(userId));
+  }
+  const init: RequestInit = {
+    method,
+    credentials: 'include',
+    cache: 'no-store',
+    redirect: 'manual',
+    headers,
+  };
+  if (signal !== undefined) init.signal = signal;
+  return init;
+}
+
+function parsePowMode(value: unknown): PowMode {
+  if (value === 'replace' || value === 'supplement' || value === 'fallback') {
+    return value;
+  }
+  return 'unknown';
+}
+
+function extractReward(dataValue: unknown): string | undefined {
+  if (!isRecord(dataValue)) return undefined;
+  for (const key of ['reward', 'amount', 'quota_awarded']) {
+    const reward = sanitizeReward(dataValue[key]);
+    if (reward !== undefined) return reward;
+  }
+  return undefined;
+}

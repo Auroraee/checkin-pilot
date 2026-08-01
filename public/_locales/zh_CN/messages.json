@@ -1,0 +1,8 @@
+{
+  "extensionName": {
+    "message": "CheckinPilot"
+  },
+  "extensionDescription": {
+    "message": "在你明确授权的兼容站点上执行本地、有限且可审计的每日签到。"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "extensionName": {
+    "message": "CheckinPilot"
+  },
+  "extensionDescription": {
+    "message": "Local, bounded, and auditable daily check-ins for compatible sites you explicitly authorize."
+  }
+}

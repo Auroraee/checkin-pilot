@@ -1,0 +1,159 @@
+body {
+  width: 390px;
+  min-height: 300px;
+}
+
+.popup-shell {
+  display: grid;
+  gap: 13px;
+  padding: 15px;
+}
+
+.primary-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.primary-actions .button {
+  width: 100%;
+}
+
+.probe-panel {
+  display: grid;
+  gap: 11px;
+  padding: 13px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+}
+
+.probe-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+}
+
+.probe-heading > div:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.probe-heading strong,
+.probe-heading span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.probe-heading span {
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+.probe-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+  border-radius: var(--radius-sm);
+}
+
+.probe-details {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+  padding: 9px;
+  background: var(--color-surface-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.probe-details > div {
+  display: grid;
+  gap: 2px;
+  padding: 0 8px;
+  border-right: 1px solid var(--color-border);
+}
+
+.probe-details > div:first-child {
+  padding-left: 0;
+}
+
+.probe-details > div:last-child {
+  padding-right: 0;
+  border-right: 0;
+}
+
+.probe-details dt {
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.probe-details dd {
+  overflow: hidden;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+}
+
+.probe-panel > p {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+.probe-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.site-list-section {
+  display: grid;
+  gap: 8px;
+}
+
+.compact-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.compact-heading h2 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.compact-heading span {
+  display: grid;
+  min-width: 20px;
+  height: 20px;
+  place-items: center;
+  color: var(--color-muted);
+  background: var(--color-surface-subtle);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.site-list {
+  display: grid;
+  gap: 8px;
+}
+
+.popup-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding-top: 2px;
+  color: var(--color-muted);
+  font-size: 10px;
+  text-align: center;
+}

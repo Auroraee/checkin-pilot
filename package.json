@@ -1,0 +1,52 @@
+{
+  "name": "checkin-pilot",
+  "version": "0.1.0-rc.0",
+  "private": true,
+  "description": "Local-first Chrome extension for explicit, bounded daily check-ins on compatible API panels.",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "author": "Auroraee",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Auroraee/checkin-pilot.git"
+  },
+  "type": "module",
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=11.0.0"
+  },
+  "scripts": {
+    "dev": "wxt -b chrome",
+    "icons": "node scripts/generate-icons.mjs",
+    "prebuild": "node scripts/generate-icons.mjs",
+    "build": "wxt build -b chrome",
+    "prezip": "node scripts/generate-icons.mjs",
+    "zip": "wxt zip -b chrome",
+    "typecheck": "wxt prepare && tsc --noEmit",
+    "test": "vitest run",
+    "test:unit": "vitest run --project unit",
+    "test:mock-e2e": "vitest run --project mock-e2e",
+    "check:secrets": "node scripts/check-build-secrets.mjs",
+    "verify": "node scripts/verify.mjs"
+  },
+  "dependencies": {
+    "@noble/hashes": "2.2.0",
+    "@phosphor-icons/react": "2.1.10",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/chrome": "0.1.4",
+    "@types/node": "24.4.0",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitest/coverage-v8": "4.1.10",
+    "@wxt-dev/module-react": "1.2.2",
+    "fake-indexeddb": "6.2.4",
+    "jsdom": "26.1.0",
+    "sharp": "0.35.3",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10",
+    "wxt": "0.21.2"
+  }
+}
