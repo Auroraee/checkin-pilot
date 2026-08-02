@@ -1,6 +1,6 @@
 # CheckinPilot
 
-CheckinPilot is a local-first Chrome extension for daily check-ins on compatible AI API panel sites. It only accesses sites that you add and authorize one origin at a time. Chrome must be running for scheduled work; missed days are never backfilled.
+CheckinPilot is an open-source, local-first Chrome extension for daily check-ins on compatible AI API panel sites. It only accesses sites that you add and authorize one origin at a time. Chrome must be running for scheduled work; missed days are never backfilled.
 
 > Status: early `v0.1.0-rc` development. The verified integration target is `https://runanytime.hxi.me`. Do not publish a stable `v0.1.0` until the real scheduled-run acceptance gate in `docs/acceptance-v0.1.md` has passed.
 
@@ -50,4 +50,4 @@ See [the discovery record](docs/discovery.md), [accepted architecture decisions]
 
 ## License
 
-Source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE.md). Personal and license-covered noncommercial organizational use is allowed. Commercial use is prohibited without separate permission. This project is not OSI open source.
+Licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution information.

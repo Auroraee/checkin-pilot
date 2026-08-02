@@ -14,7 +14,7 @@
 - New API 可通过匿名 `GET /api/status` 探测版本、签到开关与 Turnstile 配置。启用 Turnstile 时，完全无人值守签到不可作为承诺。
 - New API 的面板鉴权在已发布版本与当前主线间存在差异；工具必须做能力/版本探测，不能把普通模型 API Key 当作网页面板凭据。
 - “sub spi”指 Sub2API。Sub2API 官方主线没有通用每日签到路由；具有签到功能的 Sub2API 风格站大概率是二次开发，必须按真实站点契约适配。
-- 已有 AGPL 项目 All API Hub 覆盖 New API、Sub2API、多账号与计划签到；本项目已决定从零实现，不复制其代码，以维持已确认的单会话账号、最小权限和非商业许可边界。
+- 已有 AGPL 项目 All API Hub 覆盖 New API、Sub2API、多账号与计划签到；本项目已决定从零实现，不复制其代码，以维持已确认的单会话账号、最小权限和清晰的来源与许可边界。
 - 自动签到依赖目标站点的登录态、接口兼容性以及验证码或 Cloudflare 等交互式挑战。
 
 ## 首轮结论
@@ -47,15 +47,15 @@
 - 重绑历史已确认：新账号创建新的绑定代次；旧代次记录保留至 30 天到期，标记为先前账号且不参与当前汇总。
 - 移除语义已确认：二次确认后取消待处理工作，删除全部绑定/配置/记录并撤销 origin 权限；唯一例外是只含 origin、调度日与已用次数/秒数的 PoW 安全预算墓碑，它防止同日重加绕过上限并在本地午夜自动删除。
 - 发布顺序已确认：GitHub 公开源码与可复现 Release ZIP 首发；完成连续实测后再准备 Chrome Web Store，不让商店审核阻塞自用。
-- 许可决定已确认：采用 PolyForm Noncommercial 1.0.0，允许个人及许可证列明的非商业组织使用、修改和分发，商业使用需另行授权；项目属于“源码可用（source-available）”，不使用“开源（open source）”作为正式定位。
+- 许可决定已更新：项目采用 Apache License 2.0，以 OSI 认可的开源方式允许使用、修改和分发，并提供明确的专利许可；详见 ADR 0011。
 - 工程技术栈已确认：采用 WXT、TypeScript 与 React；核心签到逻辑保持与 React 解耦，扩展包内包含 offscreen 页面与专用 PoW Worker。
 - 运行环境最低为 Chrome 114，以使用 `WORKERS` 类型的 offscreen document 承载专用 PoW Worker。
 - 界面语言已确认：首版提供简体中文和英文，自动跟随 Chrome 界面语言，不支持的语言回退简体中文；首版不提供手动语言切换。
 - PoW 资源上限已确认：只自动处理难度 10–20；单 Worker 每个 challenge 最多计算 12 秒。每个 origin、每个本地调度日最多两次 challenge、累计 24 秒，计划、补跑、重试与扩展内手动触发共享预算，重绑或暂停恢复不能重置，首版不可调高。
 - 首版验收标准已确认：通过可复现构建和自动化/Chrome 测试后生成 RC；在 runanytime.hxi.me 完成一次真实自动签到后发布 GitHub v0.1.0；连续稳定运行 7 个 Chrome 开启日后才进入 Chrome Web Store。
 - 产品名称已确认：`CheckinPilot`；中文展示名为“CheckinPilot 自动签到”，GitHub 仓库名为 `checkin-pilot`。
-- 外部贡献策略已确认：开放 Issue 与 Pull Request，代码贡献沿用 PolyForm Noncommercial 1.0.0，贡献者保留版权，不签 CLA，维护者不取得单方面商业再许可权。
-- 许可证公开署名与 GitHub 仓库 owner 已确认使用 `Auroraee`；目标仓库地址为 `https://github.com/Auroraee/checkin-pilot`，许可证 Required Notice 使用该公开身份而不额外展示真实姓名。
+- 外部贡献策略已更新：开放 Issue 与 Pull Request；除贡献者另有明确声明外，提交并拟纳入项目的贡献按 Apache License 2.0 授权，贡献者保留版权，当前不要求签署 CLA；详见 ADR 0011。
+- 许可证公开署名与 GitHub 仓库 owner 已确认使用 `Auroraee`；目标仓库地址为 `https://github.com/Auroraee/checkin-pilot`，`NOTICE` 使用该公开身份而不额外展示真实姓名。
 - 当前待确认：最终一致性审计通过后，对完整方案作共同理解总确认；确认后才开始实现。
 
 ## 已确认安全边界

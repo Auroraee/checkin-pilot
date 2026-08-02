@@ -1,8 +1,8 @@
 # Contributing
 
-Contributions are welcome for noncommercial use of the project.
+Contributions are welcome.
 
-By submitting a contribution, you agree to license it under the same PolyForm Noncommercial 1.0.0 terms that apply to the project. You retain copyright in your contribution. No contributor license agreement is required, and contributed code cannot be unilaterally relicensed by the maintainer for commercial distribution without the contributor's separate permission.
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this project is licensed under the Apache License 2.0, without additional terms or conditions. You retain copyright in your contribution. No contributor license agreement is currently required.
 
 Before opening a pull request, run:
 
