@@ -1,11 +1,10 @@
 import type { ReactNode } from 'react';
 import {
-  AirplaneTilt,
+  AirplaneTakeoff,
   ArrowSquareOut,
   BellRinging,
   CheckCircle,
   Clock,
-  GearSix,
   PauseCircle,
   Play,
   Trash,
@@ -29,7 +28,7 @@ export function AppHeader({ trailing }: { trailing?: ReactNode }) {
   return (
     <header className="app-header">
       <div className="brand-mark" aria-hidden="true">
-        <AirplaneTilt weight="fill" size={20} />
+        <AirplaneTakeoff weight="fill" size={20} />
       </div>
       <div className="brand-copy">
         <strong>{t('appName')}</strong>
@@ -282,10 +281,12 @@ export function ScheduleCard({
 }
 
 export function SectionHeading({
+  id,
   title,
   description,
   action,
 }: {
+  id?: string;
   title: string;
   description?: string;
   action?: ReactNode;
@@ -293,16 +294,12 @@ export function SectionHeading({
   return (
     <div className="section-heading">
       <div>
-        <h2>{title}</h2>
+        <h2 id={id}>{title}</h2>
         {description ? <p>{description}</p> : null}
       </div>
       {action}
     </div>
   );
-}
-
-export function SettingsIcon() {
-  return <GearSix size={19} />;
 }
 
 export function HistoryTable({

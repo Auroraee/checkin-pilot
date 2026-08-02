@@ -51,6 +51,8 @@ export function OptionsApp() {
     () => snapshot ? [...snapshot.records].sort((a, b) => b.attemptedAt.localeCompare(a.attemptedAt)) : [],
     [snapshot?.records],
   );
+  // Card-level busy is scoped per origin; only the settings save freezes every card.
+  const globalBusy = busy === 'settings';
 
   const saveSettings = async (event: FormEvent) => {
     event.preventDefault();
@@ -70,7 +72,7 @@ export function OptionsApp() {
     setBusy('settings');
     const response = await request({
       type: 'settings:update',
-      patch: { windowStartMinutes, windowEndMinutes, notifyOnSuccess },
+      patch: { windowStartMinutes, windowEndMinutes },
     });
     if (response.ok) {
       setNotice({ tone: 'success', text: t('saved') });
@@ -78,6 +80,16 @@ export function OptionsApp() {
       setNotice({ tone: 'danger', text: t(errorTranslationKey(response.errorCode)) });
     }
     setBusy(undefined);
+  };
+
+  const toggleNotifyOnSuccess = async (checked: boolean) => {
+    setNotifyOnSuccess(checked);
+    setNotice(undefined);
+    const response = await request({ type: 'settings:update', patch: { notifyOnSuccess: checked } });
+    if (!response.ok) {
+      setNotifyOnSuccess(!checked);
+      setNotice({ tone: 'danger', text: t(errorTranslationKey(response.errorCode)) });
+    }
   };
 
   const toggleSite = async (origin: string, enabled: boolean) => {
@@ -150,6 +162,7 @@ export function OptionsApp() {
 
           <section className="settings-section" aria-labelledby="daily-window-title">
             <SectionHeading
+              id="daily-window-title"
               title={t('currentWindow')}
               description={t('browserLocalTime')}
               action={<CalendarDots size={23} weight="duotone" aria-hidden="true" />}
@@ -172,12 +185,11 @@ export function OptionsApp() {
                 <div className="setting-row">
                   <div className="setting-icon" aria-hidden="true"><Bell size={19} weight="fill" /></div>
                   <div><strong>{t('notifications')}</strong><span>{t('notifyActionOnly')}</span></div>
-                  <Switch checked onChange={() => undefined} label={t('notifyActionOnly')} disabled />
                 </div>
                 <div className="setting-row setting-row-nested">
                   <div />
                   <div><strong>{t('notifyOnSuccess')}</strong></div>
-                  <Switch checked={notifyOnSuccess} onChange={setNotifyOnSuccess} label={t('notifyOnSuccess')} />
+                  <Switch checked={notifyOnSuccess} onChange={(checked) => void toggleNotifyOnSuccess(checked)} label={t('notifyOnSuccess')} />
                 </div>
               </div>
 
@@ -192,6 +204,7 @@ export function OptionsApp() {
 
           <section className="settings-section" aria-labelledby="manage-sites-title">
             <SectionHeading
+              id="manage-sites-title"
               title={t('manageSites')}
               description={t('pausedHint')}
               action={<GlobeHemisphereWest size={23} weight="duotone" aria-hidden="true" />}
@@ -203,7 +216,7 @@ export function OptionsApp() {
                     <SiteCard
                       site={site}
                       running={snapshot.runningOrigins.includes(site.origin)}
-                      busy={Boolean(busy)}
+                      busy={globalBusy || Boolean(busy?.endsWith(site.origin))}
                       onToggle={(enabled) => void toggleSite(site.origin, enabled)}
                       onManual={() => void manualCheck(site.origin)}
                       onOpen={() => void browser.tabs.create({ url: site.origin })}
@@ -211,7 +224,7 @@ export function OptionsApp() {
                     />
                     {removeCandidate === site.origin ? (
                       <InlineNotice tone="danger" title={t('remove')}>
-                        <p>{t('confirmRemove', { site: getSiteDisplayName(site) })}</p>
+                        {t('confirmRemove', { site: getSiteDisplayName(site) })}
                         <div className="settings-actions">
                           <Button variant="ghost" onClick={() => setRemoveCandidate(undefined)} disabled={Boolean(busy)}>
                             {t('cancel')}
@@ -242,6 +255,7 @@ export function OptionsApp() {
 
           <section className="settings-section" aria-labelledby="history-title">
             <SectionHeading
+              id="history-title"
               title={t('history')}
               description={t('historyDescription')}
               action={<ListChecks size={23} weight="duotone" aria-hidden="true" />}

@@ -6,7 +6,6 @@ import {
   PlayCircle,
   Plus,
   ShieldCheck,
-  WarningCircle,
 } from '@phosphor-icons/react';
 import { browser } from 'wxt/browser';
 import type { ProbeReport, SiteView } from '../../src/shared/domain';
@@ -273,6 +272,8 @@ export function PopupApp() {
   };
 
   const enabledCount = snapshot?.sites.filter((site) => site.enabled).length ?? 0;
+  // Card-level busy is scoped per origin; only probe/confirm/batch freeze every card.
+  const globalBusy = busy === 'probe' || busy === 'confirm' || busy === 'batch';
 
   return (
     <main className="popup-shell">
@@ -367,7 +368,7 @@ export function PopupApp() {
                     key={site.origin}
                     site={site}
                     running={snapshot.runningOrigins.includes(site.origin)}
-                    busy={Boolean(busy)}
+                    busy={globalBusy || Boolean(busy?.endsWith(site.origin))}
                     onToggle={(enabled) => void toggleSite(site.origin, enabled)}
                     onManual={() => void manualCheck(site.origin)}
                     onOpen={() => void browser.tabs.create({ url: site.origin })}
