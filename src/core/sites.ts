@@ -48,6 +48,24 @@ export function latestRecordForCurrentBinding(
     .sort((left, right) => Date.parse(right.attemptedAt) - Date.parse(left.attemptedAt))[0];
 }
 
+/**
+ * True when the current binding already checked in today, so scheduled and
+ * catch-up batches skip sites the user (or an earlier run) already did.
+ */
+export function hasSuccessfulCheckinToday(
+  site: SiteConfig,
+  records: readonly CheckinRecord[],
+  scheduleDay: string,
+): boolean {
+  return records.some(
+    (record) =>
+      record.origin === site.origin &&
+      record.bindingGeneration === site.binding.generation &&
+      record.scheduleDay === scheduleDay &&
+      (record.outcome === 'success' || record.outcome === 'already_checked'),
+  );
+}
+
 export function buildSiteViews(state: StorageState): SiteView[] {
   return Object.values(state.sites)
     .map((site) => {

@@ -35,7 +35,7 @@ import {
   markScheduleRunning,
   type ScheduleWakeCause,
 } from '../src/core/schedule';
-import { buildSiteViews, removeSite } from '../src/core/sites';
+import { buildSiteViews, hasSuccessfulCheckinToday, removeSite } from '../src/core/sites';
 import { createStateRepository } from '../src/core/storage';
 import { localMonthQuery, localScheduleDay } from '../src/core/time';
 import { solvePowOffscreen } from '../src/pow/offscreen-client';
@@ -278,7 +278,10 @@ export default defineBackground(() => {
     await repo.update((draft) => {
       if (draft.activeBatch) return;
       const scheduleDay = localScheduleDay(now);
-      const sites = selectSitesForTrigger(Object.values(draft.sites), trigger);
+      const sites = selectSitesForTrigger(Object.values(draft.sites), trigger).filter(
+        // run_all is explicit; scheduled/catchup skip sites already done today.
+        (site) => trigger === 'run_all' || !hasSuccessfulCheckinToday(site, draft.records, scheduleDay),
+      );
       const batch = createPersistentBatch(sites, trigger, scheduleDay, now);
       if (batch.pendingOrigins.length === 0) {
         completeScheduleForBatch(draft, trigger, scheduleDay);

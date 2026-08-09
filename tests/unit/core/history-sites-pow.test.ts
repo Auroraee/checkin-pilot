@@ -3,6 +3,7 @@ import {
   buildSiteViews,
   canStartPowChallenge,
   clearExpiredPowLedgers,
+  hasSuccessfulCheckinToday,
   powLedgerKey,
   pruneHistory,
   readPowBudget,
@@ -49,6 +50,29 @@ describe('history and binding generations', () => {
     expect(view?.binding.userId).toBe(8);
     expect(view?.latestRecord?.id).toBe('current');
     expect(view?.isPreviousBindingRecordExcluded).toBe(true);
+  });
+
+  it('reports today as done only for a same-day success on the current binding', () => {
+    const current = site();
+    const records = [
+      record({ id: 'manual', trigger: 'manual' }),
+      record({ id: 'failed', outcome: 'failed', attemptedAt: '2026-07-31T02:00:00.000Z' }),
+    ];
+    expect(hasSuccessfulCheckinToday(current, records, '2026-07-31')).toBe(true);
+    expect(
+      hasSuccessfulCheckinToday(current, [record({ outcome: 'already_checked' })], '2026-07-31'),
+    ).toBe(true);
+    expect(hasSuccessfulCheckinToday(current, [record({ outcome: 'failed' })], '2026-07-31')).toBe(
+      false,
+    );
+    expect(hasSuccessfulCheckinToday(current, [record()], '2026-08-01')).toBe(false);
+    expect(
+      hasSuccessfulCheckinToday(
+        current,
+        [record({ bindingGeneration: 'generation-old' })],
+        '2026-07-31',
+      ),
+    ).toBe(false);
   });
 });
 
