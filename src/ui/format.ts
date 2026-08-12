@@ -1,4 +1,4 @@
-import type { CheckinRecord, OutcomeCode, SiteView } from '../shared/domain';
+import type { ActionReason, CheckinRecord, OutcomeCode, SiteView } from '../shared/domain';
 import type { TranslationKey, UiLocale } from '../locales/translations';
 
 export function minutesToTimeInput(minutes: number): string {
@@ -63,6 +63,32 @@ export function outcomeTranslationKey(outcome: OutcomeCode): TranslationKey {
     cancelled: 'statusCancelled',
   };
   return keys[outcome];
+}
+
+const ACTION_REASON_KEYS: Record<ActionReason, TranslationKey> = {
+  sign_in: 'actionSignIn',
+  account_changed: 'actionRebind',
+  rebind_required: 'actionRebind',
+  turnstile: 'actionChallenge',
+  captcha: 'actionChallenge',
+  unknown_challenge: 'actionChallenge',
+  permission_missing: 'actionPermission',
+};
+
+export function actionReasonTranslationKey(
+  reason: ActionReason | undefined,
+): TranslationKey {
+  return reason === undefined ? 'statusActionRequired' : ACTION_REASON_KEYS[reason];
+}
+
+/** Like outcomeTranslationKey, but action_required surfaces its specific reason. */
+export function recordOutcomeTranslationKey(
+  record: Pick<CheckinRecord, 'outcome' | 'actionReason'>,
+): TranslationKey {
+  if (record.outcome === 'action_required') {
+    return actionReasonTranslationKey(record.actionReason);
+  }
+  return outcomeTranslationKey(record.outcome);
 }
 
 export function recordTone(record: CheckinRecord | undefined):

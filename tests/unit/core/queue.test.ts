@@ -15,6 +15,22 @@ describe('serial site queue', () => {
     expect(selectSitesForTrigger([paused], 'manual', paused.origin)).toEqual([paused]);
   });
 
+  it('keeps action_required sites in batches so a recovered login heals itself', () => {
+    const base = site();
+    const needsAction = site({
+      binding: { ...base.binding, state: 'action_required', actionReason: 'sign_in' },
+    });
+    expect(selectSitesForTrigger([needsAction], 'scheduled')).toEqual([needsAction]);
+    expect(selectSitesForTrigger([needsAction], 'catchup')).toEqual([needsAction]);
+    expect(selectSitesForTrigger([needsAction], 'run_all')).toEqual([needsAction]);
+
+    const pausedNeedsAction = site({
+      enabled: false,
+      binding: { ...base.binding, state: 'action_required', actionReason: 'sign_in' },
+    });
+    expect(selectSitesForTrigger([pausedNeedsAction], 'scheduled')).toEqual([]);
+  });
+
   it('uses bounded 5 to 15 second spacing', () => {
     expect(randomSerialDelayMs(() => 0)).toBe(5_000);
     expect(randomSerialDelayMs(() => 1)).toBe(15_000);

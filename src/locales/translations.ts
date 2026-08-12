@@ -1,6 +1,10 @@
 export type UiLocale = 'zh-CN' | 'en';
 
 export const zhCN = {
+  actionChallenge: '需到站点完成验证',
+  actionPermission: '需重新授予权限',
+  actionRebind: '需重新绑定账号',
+  actionSignIn: '需重新登录站点',
   addCurrentSite: '添加当前站点',
   addCurrentSiteHint: '仅在确认后保存此站点',
   addPermission: '请求访问当前站点',
@@ -111,6 +115,10 @@ export const zhCN = {
 export type TranslationKey = keyof typeof zhCN;
 
 export const en: Record<TranslationKey, string> = {
+  actionChallenge: 'Verify on the site',
+  actionPermission: 'Grant access again',
+  actionRebind: 'Rebind the account',
+  actionSignIn: 'Sign in again',
   addCurrentSite: 'Add current site',
   addCurrentSiteHint: 'Saved only after you confirm',
   addPermission: 'Allow access to current site',

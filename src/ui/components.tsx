@@ -14,10 +14,11 @@ import {
 import type { CheckinRecord, SiteView } from '../shared/domain';
 import { useI18n } from './i18n';
 import {
+  actionReasonTranslationKey,
   formatDateTime,
   formatDuration,
   getSiteDisplayName,
-  outcomeTranslationKey,
+  recordOutcomeTranslationKey,
   recordTone,
 } from './format';
 
@@ -180,12 +181,15 @@ export function Switch({
 function siteStatus(site: SiteView, running: boolean) {
   if (running) return { key: 'running' as const, tone: 'accent' as Tone };
   if (site.binding.state === 'action_required') {
-    return { key: 'statusActionRequired' as const, tone: 'warning' as Tone };
+    return {
+      key: actionReasonTranslationKey(site.binding.actionReason),
+      tone: 'warning' as Tone,
+    };
   }
   if (!site.enabled) return { key: 'disabled' as const, tone: 'neutral' as Tone };
   if (!site.latestRecord) return { key: 'statusReady' as const, tone: 'neutral' as Tone };
   return {
-    key: outcomeTranslationKey(site.latestRecord.outcome),
+    key: recordOutcomeTranslationKey(site.latestRecord),
     tone: recordTone(site.latestRecord) as Tone,
   };
 }
@@ -337,7 +341,7 @@ export function HistoryTable({
                   <span className="table-site">{site ? getSiteDisplayName(site) : record.origin}</span>
                   {previous ? <small>{t('previousBinding')}</small> : null}
                 </td>
-                <td><StatusBadge tone={recordTone(record)}>{t(outcomeTranslationKey(record.outcome))}</StatusBadge></td>
+                <td><StatusBadge tone={recordTone(record)}>{t(recordOutcomeTranslationKey(record))}</StatusBadge></td>
                 <td>{record.reward ?? ''}</td>
                 <td>{formatDuration(locale, record.durationMs)}</td>
                 <td>{record.retryCount}</td>

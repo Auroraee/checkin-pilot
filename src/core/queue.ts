@@ -18,7 +18,9 @@ export interface SerialQueueItem<T> {
 }
 
 export function isSiteEligibleForTrigger(site: SiteConfig, trigger: TriggerKind): boolean {
-  if (site.binding.state !== 'active') return false;
+  // An action_required binding still joins batches: one bounded attempt per
+  // run either confirms the user fixed it (state recovers to active) or
+  // leaves the state unchanged. Skipping would strand recovered sites.
   if (trigger === 'manual') return true;
   if (trigger === 'retry') return true;
   return site.enabled;
