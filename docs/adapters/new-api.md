@@ -40,10 +40,10 @@ POST /api/user/checkin?turnstile=<token>
 ## 鉴权支持边界
 
 - v0.10.5 至 v1.0.0-rc.10 一类已发布部署可以使用浏览器 session，但仍无条件要求 `New-Api-User: <用户 ID>` 与 session 用户匹配；`/api/user/self` 与签到接口都经过同一鉴权，因此不能在未知 ID 时只凭 Cookie 调 `/self` 发现 ID。
-- 当前官方主线改为通过 `Authorization` 传递 dashboard access token，没有 Cookie session fallback；该变体在首版明确不支持。
+- 当前官方主线改为通过 `Authorization` 传递 dashboard access token，没有 Cookie session fallback。该变体由独立的 `same-origin-refresh` 鉴权模式支持（见 `docs/modern-new-api-auth.md`）：扩展在精确同源标签页的 ISOLATED world 中调用 `/api/user/auth/refresh`，Bearer Token 只存在于注入函数的局部变量，绝不进入扩展消息、存储、日志或通知；不新增 `cookies`、`webRequest`、`debugger` 或 `<all_urls>` 权限。临时标签始终关闭，用户已有标签绝不被关闭。
 - 普通 `sk-...` 模型调用密钥不是面板签到凭据，不能混用。
 
-适配器不在鉴权变体间自动选择，也不读取或设置 `Authorization`。站点登记时先取得一个非秘密数字用户 ID，再以 `credentials: include`、`New-Api-User` 和只读签到状态请求验证 session 绑定；Chrome 网络栈会自动携带 Cookie，但扩展不申请 `cookies` 权限、不调用 `chrome.cookies`，也不读取 Cookie 值。若该会话路径失败而站点要求 Token，则标记为不支持。
+适配器不在鉴权变体间自动选择，也不读取或设置 `Authorization`。站点登记时先探测现代鉴权（refresh 成功即现代；401 表示需要登录而非不兼容；只有 refresh 明确返回 404/405 才回退旧式 session 探测），再以 `credentials: include`、`New-Api-User` 和只读签到状态请求验证 session 绑定；Chrome 网络栈会自动携带 Cookie，但扩展不申请 `cookies` 权限、不调用 `chrome.cookies`，也不读取 Cookie 值。旧式会话路径下若站点要求 Token 而 refresh 协议不存在，则标记为不支持。
 
 ## 用户 ID 来源
 
@@ -52,12 +52,12 @@ POST /api/user/checkin?turnstile=<token>
 ## 推荐任务流程
 
 1. 请求 `/api/status`，确认站点可达并识别签到与挑战配置。
-2. 取得候选数字用户 ID，以 session、`New-Api-User` 和只读签到状态请求验证绑定；任何需要 `Authorization` 的站点终止为不支持。
+2. 探测现代鉴权（同源标签页 ISOLATED world 中 refresh）；成功后以 refresh 返回的账号作为绑定身份，随后在同一注入中完成签到。refresh 返回 404/405 时回退旧式 session 流程：取得候选数字用户 ID，以 session、`New-Api-User` 和只读签到状态请求验证绑定。
 3. 请求当月签到状态。
 4. 如果 `checked_in_today` 为真，记录为“已签到（成功）”并结束。
 5. 如果未签到且无需挑战，执行一次 POST。
 6. 如果需要 Turnstile，记录“需用户交互”，打开站点签到页或发出通知，不自动绕过挑战。
-7. 对 401/403 或返回登录 HTML 的情况，记录“登录已失效”；对 429 尊重 `Retry-After`；只对网络错误与部分 5xx 做有界重试。
+7. 对 401/403 或返回登录 HTML 的情况，记录“登录已失效”；现代鉴权下当天停止且只通知一次，次日计划批次再尝试一次，重新登录后自动恢复；旧式 session 站点首次 401 后暂停并提示更新登录方式。对 429 尊重 `Retry-After`；只对网络错误与部分 5xx 做有界重试。
 
 ## 官方依据
 

@@ -17,11 +17,13 @@ import {
   sanitizeReward,
 } from './http';
 import type {
+  AdapterContext,
   AdapterOperationResult,
   CheckinStatus,
   FetchLike,
   PublicSiteStatus,
 } from './types';
+import type { CheckinFlowPlan } from '../auth/types';
 
 export interface NewApiRequestContext {
   origin: string;
@@ -45,7 +47,7 @@ export function currentLocalMonth(now = new Date()): string {
 export async function fetchPublicStatus(
   context: NewApiRequestContext,
 ): Promise<AdapterOperationResult<PublicSiteStatus>> {
-  const request = getRequestParts(context);
+  const request = getPublicRequestParts(context);
   if (!request.ok) return request;
 
   try {
@@ -175,27 +177,28 @@ export async function postCheckin(
 }
 
 export async function runNewApiCheckin(
-  context: NewApiRequestContext,
+  context: AdapterContext,
 ): Promise<NormalizedOutcome> {
-  const publicStatus = await fetchPublicStatus(context);
+  const publicStatus = await fetchPublicStatus({
+    origin: context.origin,
+    userId: context.userId,
+    ...(context.fetch !== undefined ? { fetch: context.fetch } : {}),
+    ...(context.signal !== undefined ? { signal: context.signal } : {}),
+  });
   if (!publicStatus.ok) return publicStatus.outcome;
   if (!publicStatus.value.checkinEnabled) {
     return { code: 'unsupported', errorCode: 'unsupported_protocol', retryable: false };
   }
-
-  const current = await getCheckinStatus(context);
-  if (!current.ok) return current.outcome;
-  if (current.value.checkedInToday) {
-    return { code: 'already_checked', retryable: false };
-  }
-
-  if (publicStatus.value.powEnabled) {
-    return actionRequiredOutcome('unknown_challenge', 'unsupported_protocol');
-  }
-  if (publicStatus.value.turnstileCheck) {
-    return actionRequiredOutcome('turnstile');
-  }
-  return postCheckin(context);
+  const plan: CheckinFlowPlan = {
+    month: context.month,
+    userId: context.userId,
+    powEnabled: publicStatus.value.powEnabled,
+    powMode: publicStatus.value.powMode,
+    turnstileCheck: publicStatus.value.turnstileCheck,
+    maxPowAttempts: 0,
+    powMaxMs: 0,
+  };
+  return context.transport.runCheckinFlow(plan);
 }
 
 export function capabilitiesFromStatus(status: PublicSiteStatus): SiteCapabilities {
@@ -211,6 +214,27 @@ export function capabilitiesFromStatus(status: PublicSiteStatus): SiteCapabiliti
     };
   }
   return capabilities;
+}
+
+/** Public endpoints need an origin only; no session identity is required. */
+function getPublicRequestParts(
+  context: NewApiRequestContext,
+):
+  | { ok: true; origin: string; fetch: FetchLike }
+  | { ok: false; outcome: NormalizedOutcome } {
+  try {
+    const parsed = new URL(context.origin);
+    if (parsed.protocol !== 'https:' || parsed.origin !== context.origin) {
+      return { ok: false, outcome: failedOutcome('unsupported_protocol') };
+    }
+    return {
+      ok: true,
+      origin: parsed.origin,
+      fetch: context.fetch ?? globalThis.fetch.bind(globalThis),
+    };
+  } catch {
+    return { ok: false, outcome: failedOutcome('unsupported_protocol') };
+  }
 }
 
 function getRequestParts(

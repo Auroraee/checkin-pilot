@@ -1,13 +1,19 @@
 # runanytime.hxi.me 私有签到 PoW 契约
 
-状态：基于 2026-07-31 公开前端包的静态分析  
+状态：基于 2026-07-31 公开前端包的静态分析，鉴权与注入链路见 `modern-new-api-auth.md`  
 适用范围：`https://runanytime.hxi.me`，不得当作 New API 通用协议
+
+> 2026-08-12 起，该站签到接口已迁移到短期 Bearer Token（`/api/user/auth/refresh`）。
+> 扩展在精确同源标签页的 ISOLATED world 中完成 refresh、状态查询、challenge 获取与提交；
+> 只有 `prefix/difficulty/challengeId` 通过严格的 `target/type/taskId` 路由消息发给 offscreen solver，
+> 后台返回 nonce 后页面立即提交；Bearer 绝不离开页面上下文。
 
 ## Challenge
 
 ```http
 GET /api/user/pow/challenge?action=checkin
-New-API-User: <user.id>
+Authorization: Bearer <短期 access token，仅存在于页面注入的局部变量>
+New-Api-User: <user.id>
 Cookie: <由 Chrome 登录会话自动携带，扩展不读取其内容>
 ```
 

@@ -1,11 +1,15 @@
 import type {
   AdapterId,
+  AuthMode,
   IdentitySource,
   NormalizedOutcome,
   PowMode,
   ProbeReport,
   SiteCapabilities,
 } from '../shared/domain';
+import type { AuthTransport } from '../auth/types';
+
+export type { AuthTransport } from '../auth/types';
 
 export type FetchLike = (
   input: RequestInfo | URL,
@@ -32,18 +36,20 @@ export interface PowAttemptBudget {
   maxMs: number;
 }
 
+/**
+ * Protocol adapter run context. Protocol logic (new-api, runanytime) is
+ * decoupled from the auth method: every authenticated operation goes through
+ * the injected `AuthTransport`, while `fetch` is only used for public status.
+ */
 export interface AdapterContext {
   origin: string;
   userId: number;
   adapterId: AdapterId;
-  month?: string;
+  authMode: AuthMode;
+  month: string;
+  transport: AuthTransport;
   fetch?: FetchLike;
   signal?: AbortSignal;
-  solvePow?: PowSolver;
-  powMaxMs?: number;
-  getPowAttemptBudget?: () => PowAttemptBudget | Promise<PowAttemptBudget>;
-  onPowChallengeAcquired?: () => void | Promise<void>;
-  onPowWorkerUsed?: (elapsedMs: number) => void | Promise<void>;
 }
 
 export interface ProbeAdapterContext {

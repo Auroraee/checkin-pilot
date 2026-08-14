@@ -17,6 +17,7 @@ export function errorTranslationKey(error: unknown): TranslationKey {
       ? error.message
       : '';
   if (code.includes('permission')) return 'errorPermission';
+  if (code.includes('auth_upgrade') || code.includes('upgrade')) return 'errorAuthUpgrade';
   if (code.includes('auth') || code.includes('sign_in')) return 'errorAuth';
   if (code.includes('account') || code.includes('rebind')) return 'errorAccountChanged';
   if (code.includes('network') || code.includes('fetch')) return 'errorNetwork';

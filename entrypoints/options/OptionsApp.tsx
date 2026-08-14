@@ -111,12 +111,18 @@ export function OptionsApp() {
     } else if (response.type === 'checkin') {
       const successful = response.outcome.code === 'success' || response.outcome.code === 'already_checked';
       setNotice({
-        tone: successful ? 'success' : response.outcome.code === 'action_required' ? 'warning' : 'danger',
+        tone: successful
+          ? 'success'
+          : response.outcome.code === 'action_required' || response.outcome.code === 'unverified'
+            ? 'warning'
+            : 'danger',
         text: successful
           ? response.outcome.code === 'already_checked' ? t('alreadyChecked') : t('success')
           : response.outcome.code === 'action_required'
             ? t('challengeRequired')
-            : t(errorTranslationKey(response.outcome.errorCode)),
+            : response.outcome.code === 'unverified'
+              ? t('statusUnverified')
+              : t(errorTranslationKey(response.outcome.errorCode)),
       });
     }
     setBusy(undefined);

@@ -19,6 +19,13 @@ body {
   width: 100%;
 }
 
+.auth-boundary-hint {
+  margin: -5px 0 0;
+  color: var(--color-muted);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
 .probe-panel {
   display: grid;
   gap: 11px;

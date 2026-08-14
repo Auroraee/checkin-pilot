@@ -42,11 +42,11 @@ The unpacked extension is emitted under `.output/chrome-mv3`, and the release ar
 ## Platform scope
 
 - New API deployments using the legacy browser session plus numeric `New-Api-User` header can be detected.
-- `runanytime.hxi.me` is the only verified v0.1 site adapter.
-- Token-only New API deployments are not supported because CheckinPilot never stores dashboard tokens.
+- New API deployments using the short-lived bearer login are supported through a same-origin page session: a temporary background tab (or an already open same-origin tab, which is never closed) runs `/api/user/auth/refresh` in its ISOLATED world; the bearer token stays inside the page and never enters extension messages, storage, logs, notifications or snapshots. No `cookies`, `webRequest`, `debugger` or `<all_urls>` permission is used.
+- `runanytime.hxi.me` is the only verified v0.1 site adapter (modern bearer auth plus the private check-in PoW protocol).
 - Official Sub2API currently has no compatible daily check-in contract and is not supported by the generic adapter.
 
-See [the discovery record](docs/discovery.md), [accepted architecture decisions](docs/adr), and [v0.1 acceptance gates](docs/acceptance-v0.1.md).
+See [the discovery record](docs/discovery.md), [accepted architecture decisions](docs/adr), the [modern New API auth decision](docs/modern-new-api-auth.md), and [v0.1 acceptance gates](docs/acceptance-v0.1.md).
 
 ## License
 

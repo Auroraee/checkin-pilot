@@ -7,6 +7,7 @@ import type {
 } from '../shared/domain';
 
 const NOTIFICATION_PREFIX = 'checkin-pilot:site:';
+const UPGRADE_NOTIFICATION_ID = 'checkin-pilot:auth-upgrade';
 
 interface NotificationCopy {
   actionTitle: string;
@@ -14,6 +15,8 @@ interface NotificationCopy {
   failureBody: string;
   successTitle: string;
   successBody: string;
+  upgradeTitle: string;
+  upgradeBody: string;
 }
 
 function isEnglishLocale(): boolean {
@@ -28,6 +31,8 @@ function copyForCurrentLocale(): NotificationCopy {
         failureBody: 'The final bounded attempt failed. Open CheckinPilot for details.',
         successTitle: 'Check-in complete',
         successBody: 'The site confirmed today’s check-in.',
+        upgradeTitle: 'Update the sign-in method',
+        upgradeBody: 'Some sites now require a refreshed login. Open the site page and click “Update current site” to re-enable them.',
       }
     : {
         actionTitle: '签到需要你的处理',
@@ -35,6 +40,8 @@ function copyForCurrentLocale(): NotificationCopy {
         failureBody: '有限次数的最终尝试仍失败，请打开 CheckinPilot 查看。',
         successTitle: '签到完成',
         successBody: '站点已确认今天的签到。',
+        upgradeTitle: '更新登录方式',
+        upgradeBody: '部分站点已改用新的登录方式。打开站点页面并点击「更新当前网站」即可重新启用。',
       };
 }
 
@@ -50,6 +57,10 @@ function actionBodyForReason(reason: ActionReason | undefined): string {
       return english
         ? 'The signed-in account changed. Rebind the site from its page.'
         : '站点登录账号已变化，请在站点页面重新绑定。';
+    case 'auth_upgrade_required':
+      return english
+        ? 'The site switched to a new sign-in method. Open the site page and click “Update current site”.'
+        : '站点已切换新的登录方式，请打开站点页面点击「更新当前网站」。';
     case 'turnstile':
     case 'captcha':
     case 'unknown_challenge':
@@ -93,6 +104,7 @@ export async function notifyForOutcome(
     title = copy.successTitle;
     message = copy.successBody;
   }
+  // 'unverified' (visit mode) is a terminal result but never notifies.
 
   if (!title || !message) return;
 
@@ -104,8 +116,23 @@ export async function notifyForOutcome(
   });
 }
 
+/** One-time migration notice telling the user to update the login method. */
+export async function notifyAuthUpgradeOnce(): Promise<void> {
+  const copy = copyForCurrentLocale();
+  await browser.notifications.create(UPGRADE_NOTIFICATION_ID, {
+    type: 'basic',
+    iconUrl: browser.runtime.getURL('/icon/128.png'),
+    title: copy.upgradeTitle,
+    message: copy.upgradeBody,
+  });
+}
+
 export function registerNotificationNavigation(): void {
   browser.notifications.onClicked.addListener((id) => {
+    if (id === UPGRADE_NOTIFICATION_ID) {
+      void browser.runtime.openOptionsPage();
+      return;
+    }
     if (!id.startsWith(NOTIFICATION_PREFIX)) return;
     const encodedOrigin = id.slice(NOTIFICATION_PREFIX.length);
     try {

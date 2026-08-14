@@ -61,6 +61,7 @@ export function outcomeTranslationKey(outcome: OutcomeCode): TranslationKey {
     failed: 'statusFailed',
     unsupported: 'statusUnsupported',
     cancelled: 'statusCancelled',
+    unverified: 'statusUnverified',
   };
   return keys[outcome];
 }
@@ -69,10 +70,12 @@ const ACTION_REASON_KEYS: Record<ActionReason, TranslationKey> = {
   sign_in: 'actionSignIn',
   account_changed: 'actionRebind',
   rebind_required: 'actionRebind',
+  auth_upgrade_required: 'actionUpgradeAuth',
   turnstile: 'actionChallenge',
   captcha: 'actionChallenge',
   unknown_challenge: 'actionChallenge',
   permission_missing: 'actionPermission',
+  identity_missing: 'actionRebind',
 };
 
 export function actionReasonTranslationKey(
@@ -102,5 +105,6 @@ export function recordTone(record: CheckinRecord | undefined):
   }
   if (record.outcome === 'action_required') return 'warning';
   if (record.outcome === 'failed') return 'danger';
+  // cancelled and unverified are terminal, neutral results.
   return 'neutral';
 }

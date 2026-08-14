@@ -1,15 +1,19 @@
 import { browser } from 'wxt/browser';
+import { runAdapterCheckin } from '../src/adapters';
 import {
-  probeAdapter,
-  runAdapterCheckin,
-  RUNANYTIME_ORIGIN,
-} from '../src/adapters';
+  LegacySessionTransport,
+  ModernRefreshTransport,
+  openPageSession,
+  probeSite,
+  type AuthTransport,
+} from '../src/auth';
 import {
   createPersistentBatch,
   finishBatchOrigin,
   nextEligibleBatchOrigin,
 } from '../src/background/batch';
 import {
+  notifyAuthUpgradeOnce,
   notifyForOutcome,
   registerNotificationNavigation,
 } from '../src/background/notifications';
@@ -17,8 +21,12 @@ import { setOutcomeBadge } from '../src/background/badge';
 import { safeLog } from '../src/background/redaction';
 import {
   isSafeEnrollmentLabel,
+  validateAuthMode,
+  validateCapabilities,
+  validateIdentitySource,
   validateOrigin,
   validateSettingsPatch,
+  validateTabId,
   validateUserId,
 } from '../src/background/validation';
 import {
@@ -26,7 +34,7 @@ import {
   recordPowUsage,
   reservePowChallenge,
 } from '../src/core/pow-ledger';
-import { randomSerialDelayMs, selectSitesForTrigger } from '../src/core/queue';
+import { isStoppedForTheDay, randomSerialDelayMs, selectSitesForTrigger } from '../src/core/queue';
 import { createRetryJob, isRetryJobDue } from '../src/core/retry';
 import {
   ensureDailySchedule,
@@ -41,7 +49,9 @@ import { localMonthQuery, localScheduleDay } from '../src/core/time';
 import { solvePowOffscreen } from '../src/pow/offscreen-client';
 import {
   BATCH_ALARM_NAME,
+  POW_MAX_DIFFICULTY,
   POW_MAX_WORKER_MS_PER_CHALLENGE,
+  POW_MIN_DIFFICULTY,
   RETRY_ALARM_PREFIX,
   SCHEDULE_ALARM_PREFIX,
 } from '../src/shared/constants';
@@ -55,8 +65,11 @@ import type {
 } from '../src/shared/domain';
 import {
   isAppRequest,
+  isPagePowSolveRequest,
   type AppRequest,
   type AppResponse,
+  type EnrollmentConfirmation,
+  type PagePowSolveResponse,
 } from '../src/shared/messages';
 import {
   clearPendingEnrollment,
@@ -71,6 +84,10 @@ const DAILY_TICK_ALARM = 'checkin-pilot:daily-tick';
 export default defineBackground(() => {
   const repo = createStateRepository(browser.storage.local);
   const runningOrigins = new Set<string>();
+  /** tabId -> origin for page sessions currently performing a check-in. */
+  const pageSessionTabs = new Map<number, string>();
+  /** Per-session task ids already routed, to reject replays. */
+  const pagePowTaskIds = new Map<number, Set<string>>();
   let pumping = false;
 
   /** repo.update mutators receive a draft clone; helpers return fresh states. */
@@ -126,7 +143,8 @@ export default defineBackground(() => {
       const tab = await browser.tabs.create({ url: origin, active: false });
       tabId = tab.id;
       await new Promise((resolve) => setTimeout(resolve, 15_000));
-      return { code: 'success', retryable: false };
+      // The site may or may not have checked in; the result is unverified.
+      return { code: 'unverified', retryable: false };
     } catch {
       return { code: 'failed', errorCode: 'unknown', retryable: false };
     } finally {
@@ -134,6 +152,51 @@ export default defineBackground(() => {
         await browser.tabs.remove(tabId).catch(() => undefined);
       }
     }
+  }
+
+  /** Builds the auth transport for a site's auth mode. */
+  async function createTransport(
+    site: SiteConfig,
+    attemptDay: string,
+  ): Promise<{ transport: AuthTransport; pageTabId?: number } | undefined> {
+    if (site.authMode === 'same-origin-refresh') {
+      const session = await openPageSession(site.origin);
+      pageSessionTabs.set(session.tabId, site.origin);
+      pagePowTaskIds.set(session.tabId, new Set());
+      return { transport: new ModernRefreshTransport(session), pageTabId: session.tabId };
+    }
+    if (site.authMode === 'legacy-session') {
+      return {
+        transport: new LegacySessionTransport({
+          origin: site.origin,
+          userId: site.binding.userId,
+          solvePow: solvePowOffscreen,
+          powMaxMs: POW_MAX_WORKER_MS_PER_CHALLENGE,
+          getPowAttemptBudget: async () => {
+            const budget = readPowBudget(await repo.read(), site.origin, attemptDay);
+            return {
+              allowed: budget.canStart,
+              maxMs: Math.min(POW_MAX_WORKER_MS_PER_CHALLENGE, budget.workerMsRemaining),
+            };
+          },
+          onPowChallengeAcquired: async () => {
+            const { value } = await repo.update((draft) => {
+              const reserved = reservePowChallenge(draft, site.origin, attemptDay);
+              if (!reserved) return false;
+              replaceState(draft, reserved);
+              return true;
+            });
+            if (!value) throw new Error('pow_budget_exhausted');
+          },
+          onPowWorkerUsed: async (elapsedMs) => {
+            await repo.update((draft) => {
+              replaceState(draft, recordPowUsage(draft, site.origin, attemptDay, elapsedMs));
+            });
+          },
+        }),
+      };
+    }
+    return undefined;
   }
 
   /** Runs one bounded attempt for one site, records the outcome, and queues retries. */
@@ -149,10 +212,13 @@ export default defineBackground(() => {
     runningOrigins.add(origin);
     const startedAt = Date.now();
     const attemptDay = localScheduleDay();
+    let pageTabId: number | undefined;
+    let transport: AuthTransport | undefined;
     try {
       const state = await repo.read();
       const site = state.sites[origin];
       if (!site) return { code: 'failed', errorCode: 'unknown', retryable: false };
+      const priorRecords = state.records;
 
       let outcome: NormalizedOutcome;
       if (site.adapterId === 'visit-open') {
@@ -165,34 +231,39 @@ export default defineBackground(() => {
           retryable: false,
         };
       } else {
-        outcome = await runAdapterCheckin({
-          origin,
-          userId: site.binding.userId,
-          adapterId: site.adapterId,
-          month: localMonthQuery(),
-          solvePow: solvePowOffscreen,
-          getPowAttemptBudget: async () => {
-            const budget = readPowBudget(await repo.read(), origin, attemptDay);
-            return {
-              allowed: budget.canStart,
-              maxMs: Math.min(POW_MAX_WORKER_MS_PER_CHALLENGE, budget.workerMsRemaining),
-            };
-          },
-          onPowChallengeAcquired: async () => {
-            const { value } = await repo.update((draft) => {
-              const reserved = reservePowChallenge(draft, origin, attemptDay);
-              if (!reserved) return false;
-              replaceState(draft, reserved);
-              return true;
+        const created = await createTransport(site, attemptDay);
+        transport = created?.transport;
+        pageTabId = created?.pageTabId;
+        if (transport === undefined) {
+          outcome = {
+            code: 'action_required',
+            actionReason: 'auth_upgrade_required',
+            errorCode: 'unsupported_protocol',
+            retryable: false,
+          };
+        } else {
+          try {
+            outcome = await runAdapterCheckin({
+              origin,
+              userId: site.binding.userId,
+              adapterId: site.adapterId,
+              authMode: site.authMode,
+              month: localMonthQuery(),
+              transport,
             });
-            if (!value) throw new Error('pow_budget_exhausted');
-          },
-          onPowWorkerUsed: async (elapsedMs) => {
-            await repo.update((draft) => {
-              replaceState(draft, recordPowUsage(draft, origin, attemptDay, elapsedMs));
-            });
-          },
-        });
+          } catch {
+            outcome = { code: 'failed', errorCode: 'unknown', retryable: false };
+          }
+        }
+        if (
+          outcome.code === 'action_required' &&
+          outcome.actionReason === 'sign_in' &&
+          site.authMode === 'legacy-session'
+        ) {
+          // First 401 on a legacy-session site: pause it and prompt the
+          // user to update the login method via "Update current site".
+          outcome = { ...outcome, actionReason: 'auth_upgrade_required' };
+        }
       }
 
       const durationMs = Date.now() - startedAt;
@@ -223,10 +294,15 @@ export default defineBackground(() => {
           outcome.code === 'action_required' &&
           (outcome.actionReason === 'sign_in' ||
             outcome.actionReason === 'account_changed' ||
-            outcome.actionReason === 'rebind_required')
+            outcome.actionReason === 'rebind_required' ||
+            outcome.actionReason === 'auth_upgrade_required')
         ) {
           current.binding.state = 'action_required';
           current.binding.actionReason = outcome.actionReason;
+          if (outcome.actionReason === 'auth_upgrade_required') {
+            // Paused until the user updates the login method on the site page.
+            current.enabled = false;
+          }
         }
 
         const retryBase = trigger === 'retry' ? originalTrigger : trigger;
@@ -247,7 +323,17 @@ export default defineBackground(() => {
       });
 
       const settings = (await repo.read()).settings;
-      await notifyForOutcome(site, outcome, settings).catch(() => undefined);
+      // "Notify only once per day" for a repeated action-required condition.
+      const alreadyNotified = priorRecords.some(
+        (record) =>
+          record.origin === origin &&
+          record.scheduleDay === attemptDay &&
+          record.outcome === outcome.code &&
+          record.actionReason === outcome.actionReason,
+      );
+      if (!alreadyNotified) {
+        await notifyForOutcome(site, outcome, settings).catch(() => undefined);
+      }
       await setOutcomeBadge(outcome.code).catch(() => undefined);
       safeLog('info', 'checkin', {
         origin,
@@ -258,7 +344,96 @@ export default defineBackground(() => {
       });
       return outcome;
     } finally {
+      if (transport !== undefined) {
+        await transport.close().catch(() => undefined);
+      }
+      if (pageTabId !== undefined) {
+        pageSessionTabs.delete(pageTabId);
+        pagePowTaskIds.delete(pageTabId);
+      }
       runningOrigins.delete(origin);
+    }
+  }
+
+  /** Strictly routed PoW solve from an ISOLATED-world page session. */
+  function isValidPagePowRequest(message: {
+    tabId: number;
+    taskId: string;
+    prefix: string;
+    difficulty: number;
+    maxMs: number;
+  }): boolean {
+    return (
+      Number.isSafeInteger(message.tabId) &&
+      message.taskId.length > 0 &&
+      message.taskId.length <= 128 &&
+      message.prefix.length > 0 &&
+      message.prefix.length <= 4_096 &&
+      Number.isInteger(message.difficulty) &&
+      message.difficulty >= POW_MIN_DIFFICULTY &&
+      message.difficulty <= POW_MAX_DIFFICULTY &&
+      Number.isFinite(message.maxMs) &&
+      message.maxMs > 0 &&
+      message.maxMs <= POW_MAX_WORKER_MS_PER_CHALLENGE
+    );
+  }
+
+  async function handlePagePowSolve(
+    senderTabId: number,
+    message: {
+      tabId: number;
+      taskId: string;
+      prefix: string;
+      difficulty: number;
+      maxMs: number;
+    },
+  ): Promise<PagePowSolveResponse> {
+    const origin = pageSessionTabs.get(senderTabId);
+    if (origin === undefined || message.tabId !== senderTabId) {
+      return { status: 'error', elapsedMs: 0 };
+    }
+    if (!isValidPagePowRequest(message)) {
+      return { status: 'error', elapsedMs: 0 };
+    }
+    const taskIds = pagePowTaskIds.get(senderTabId);
+    if (taskIds === undefined || taskIds.has(message.taskId)) {
+      return { status: 'error', elapsedMs: 0 };
+    }
+    const attemptDay = localScheduleDay();
+    const budget = readPowBudget(await repo.read(), origin, attemptDay);
+    if (!budget.canStart || budget.workerMsRemaining <= 0) {
+      return { status: 'error', elapsedMs: 0, errorCode: 'pow_budget_exhausted' };
+    }
+    const { value: reserved } = await repo.update((draft) => {
+      const next = reservePowChallenge(draft, origin, attemptDay);
+      if (!next) return false;
+      replaceState(draft, next);
+      return true;
+    });
+    if (!reserved) {
+      return { status: 'error', elapsedMs: 0, errorCode: 'pow_budget_exhausted' };
+    }
+    const maxMs = Math.min(
+      POW_MAX_WORKER_MS_PER_CHALLENGE,
+      budget.workerMsRemaining,
+      Math.max(0, Math.floor(message.maxMs)),
+    );
+    if (maxMs <= 0) {
+      return { status: 'error', elapsedMs: 0, errorCode: 'pow_budget_exhausted' };
+    }
+    taskIds.add(message.taskId);
+    try {
+      const solved = await solvePowOffscreen({
+        prefix: message.prefix,
+        difficulty: message.difficulty,
+        maxMs,
+      });
+      await repo.update((draft) => {
+        replaceState(draft, recordPowUsage(draft, origin, attemptDay, solved.elapsedMs));
+      });
+      return solved;
+    } catch {
+      return { status: 'error', elapsedMs: 0 };
     }
   }
 
@@ -281,7 +456,7 @@ export default defineBackground(() => {
       const sites = selectSitesForTrigger(Object.values(draft.sites), trigger).filter(
         // run_all is explicit; scheduled/catchup skip sites already done today.
         (site) => trigger === 'run_all' || !hasSuccessfulCheckinToday(site, draft.records, scheduleDay),
-      );
+      ).filter((site) => !isStoppedForTheDay(site, draft.records, scheduleDay));
       const batch = createPersistentBatch(sites, trigger, scheduleDay, now);
       if (batch.pendingOrigins.length === 0) {
         completeScheduleForBatch(draft, trigger, scheduleDay);
@@ -389,6 +564,21 @@ export default defineBackground(() => {
     if (due) await startBatch(due);
   }
 
+  /** One-time v2 migration notice: "update the login method". */
+  async function maybeSendAuthUpgradeNotice(): Promise<void> {
+    const state = await repo.read();
+    if (state.upgrade.authUpgradeNoticeSent) return;
+    const needsNotice = Object.values(state.sites).some(
+      (site) => site.binding.actionReason === 'auth_upgrade_required',
+    );
+    await repo.update((draft) => {
+      draft.upgrade.authUpgradeNoticeSent = true;
+    });
+    if (needsNotice) {
+      await notifyAuthUpgradeOnce().catch(() => undefined);
+    }
+  }
+
   async function handleRetryAlarm(alarmName: string): Promise<void> {
     const jobId = alarmName.slice(RETRY_ALARM_PREFIX.length);
     const state = await repo.read();
@@ -406,45 +596,69 @@ export default defineBackground(() => {
     await executeCheckin(job.origin, 'retry', job.retryCount, job.originalTrigger);
   }
 
+  function isValidEnrollment(enrollment: unknown): enrollment is EnrollmentConfirmation {
+    if (typeof enrollment !== 'object' || enrollment === null) return false;
+    const candidate = enrollment as Partial<EnrollmentConfirmation>;
+    return (
+      validateOrigin(candidate.origin) &&
+      validateUserId(candidate.userId) &&
+      isSafeEnrollmentLabel(candidate.label) &&
+      validateIdentitySource(candidate.identitySource) &&
+      validateAuthMode(candidate.authMode) &&
+      (candidate.adapterId === 'new-api' ||
+        candidate.adapterId === 'runanytime' ||
+        candidate.adapterId === 'visit-open') &&
+      (candidate.platform === 'new-api' ||
+        candidate.platform === 'runanytime' ||
+        candidate.platform === 'generic') &&
+      (candidate.supportLevel === 'detected' || candidate.supportLevel === 'verified') &&
+      validateCapabilities(candidate.capabilities)
+    );
+  }
+
   async function handleAppRequest(request: AppRequest): Promise<AppResponse> {
     switch (request.type) {
       case 'snapshot:get':
         return snapshotResponse('snapshot');
 
       case 'site:probe': {
-        if (!validateOrigin(request.origin) || !validateUserId(request.userId)) {
+        if (!validateOrigin(request.origin)) {
           return { ok: false, errorCode: 'invalid_request' };
         }
-        const report = await probeAdapter({
+        if (request.userId !== undefined && !validateUserId(request.userId)) {
+          return { ok: false, errorCode: 'invalid_request' };
+        }
+        if (request.identitySource !== undefined && !validateIdentitySource(request.identitySource)) {
+          return { ok: false, errorCode: 'invalid_request' };
+        }
+        if (request.tabId !== undefined && !validateTabId(request.tabId)) {
+          return { ok: false, errorCode: 'invalid_request' };
+        }
+        const report = await probeSite({
           origin: request.origin,
-          userId: request.userId,
-          identitySource: request.identitySource,
+          ...(request.userId !== undefined ? { userId: request.userId } : {}),
+          ...(request.identitySource !== undefined ? { identitySource: request.identitySource } : {}),
           month: localMonthQuery(),
+          ...(request.tabId !== undefined ? { tabId: request.tabId } : {}),
         });
         return { ok: true, type: 'probe', report };
       }
 
       case 'site:confirm': {
         const enrollment = request.enrollment;
-        if (
-          !validateOrigin(enrollment.origin) ||
-          !validateUserId(enrollment.userId) ||
-          !isSafeEnrollmentLabel(enrollment.label) ||
-          (enrollment.identitySource !== 'uid' && enrollment.identitySource !== 'user.id')
-        ) {
+        if (!isValidEnrollment(enrollment)) {
           return { ok: false, errorCode: 'invalid_request' };
         }
-        const isRunanytime = enrollment.origin === RUNANYTIME_ORIGIN;
-        const isVisit = enrollment.adapterId === 'visit-open';
+        const existing = (await repo.read()).sites[enrollment.origin];
         await repo.update((draft) => {
           const nowIso = new Date().toISOString();
-          const existing = draft.sites[enrollment.origin];
           const site: SiteConfig = {
             origin: enrollment.origin,
             label: enrollment.label,
-            platform: isVisit ? 'generic' : isRunanytime ? 'runanytime' : 'new-api',
-            adapterId: isVisit ? 'visit-open' : isRunanytime ? 'runanytime-pow' : 'new-api-session',
-            supportLevel: isRunanytime ? 'verified' : 'detected',
+            platform: enrollment.platform,
+            adapterId: enrollment.adapterId,
+            authMode: enrollment.authMode,
+            supportLevel: enrollment.supportLevel,
             enabled: true,
             createdAt: existing?.createdAt ?? nowIso,
             updatedAt: nowIso,
@@ -462,8 +676,78 @@ export default defineBackground(() => {
         return snapshotResponse('mutation');
       }
 
+      case 'site:upgrade': {
+        const enrollment = request.enrollment;
+        if (!isValidEnrollment(enrollment)) {
+          return { ok: false, errorCode: 'invalid_request' };
+        }
+        const { value } = await repo.update<
+          'ok' | 'site_not_found' | 'account_changed'
+        >((draft) => {
+          const site = draft.sites[enrollment.origin];
+          if (!site) return 'site_not_found';
+          // An account change always needs a separately confirmed rebind.
+          if (site.binding.userId !== enrollment.userId) return 'account_changed';
+          const nowIso = new Date().toISOString();
+          draft.sites[enrollment.origin] = {
+            ...site,
+            label: site.label || enrollment.label,
+            platform: enrollment.platform,
+            adapterId: enrollment.adapterId,
+            authMode: enrollment.authMode,
+            supportLevel: enrollment.supportLevel,
+            capabilities: enrollment.capabilities,
+            enabled: true,
+            updatedAt: nowIso,
+            binding: {
+              userId: site.binding.userId,
+              identitySource: enrollment.identitySource,
+              generation: site.binding.generation,
+              boundAt: site.binding.boundAt,
+              state: 'active',
+            },
+          };
+          return 'ok';
+        });
+        if (value !== 'ok') return { ok: false, errorCode: value };
+        return snapshotResponse('mutation');
+      }
+
       case 'site:rebind': {
-        if (!validateOrigin(request.origin) || !validateUserId(request.userId)) {
+        if (
+          !validateOrigin(request.origin) ||
+          !validateUserId(request.userId) ||
+          !validateIdentitySource(request.identitySource)
+        ) {
+          return { ok: false, errorCode: 'invalid_request' };
+        }
+        if (request.authMode !== undefined && !validateAuthMode(request.authMode)) {
+          return { ok: false, errorCode: 'invalid_request' };
+        }
+        if (
+          request.adapterId !== undefined &&
+          request.adapterId !== 'new-api' &&
+          request.adapterId !== 'runanytime' &&
+          request.adapterId !== 'visit-open'
+        ) {
+          return { ok: false, errorCode: 'invalid_request' };
+        }
+        if (
+          request.platform !== undefined &&
+          request.platform !== 'new-api' &&
+          request.platform !== 'runanytime' &&
+          request.platform !== 'generic'
+        ) {
+          return { ok: false, errorCode: 'invalid_request' };
+        }
+        if (
+          request.supportLevel !== undefined &&
+          request.supportLevel !== 'detected' &&
+          request.supportLevel !== 'verified'
+        ) {
+          return { ok: false, errorCode: 'invalid_request' };
+        }
+        if (request.capabilities !== undefined && !validateCapabilities(request.capabilities)) {
           return { ok: false, errorCode: 'invalid_request' };
         }
         const { value } = await repo.update((draft) => {
@@ -472,10 +756,16 @@ export default defineBackground(() => {
           const nowIso = new Date().toISOString();
           draft.sites[request.origin] = {
             ...site,
+            ...(request.authMode !== undefined ? { authMode: request.authMode } : {}),
+            ...(request.adapterId !== undefined ? { adapterId: request.adapterId } : {}),
+            ...(request.platform !== undefined ? { platform: request.platform } : {}),
+            ...(request.supportLevel !== undefined ? { supportLevel: request.supportLevel } : {}),
+            ...(request.capabilities !== undefined ? { capabilities: request.capabilities } : {}),
+            enabled: true,
             updatedAt: nowIso,
             binding: {
               userId: request.userId,
-              identitySource: request.identitySource === 'uid' ? 'uid' : 'user.id',
+              identitySource: request.identitySource,
               generation: crypto.randomUUID(),
               boundAt: nowIso,
               state: 'active',
@@ -568,8 +858,8 @@ export default defineBackground(() => {
 
   /**
    * The optional-permission dialog closes the popup, killing its enrollment
-   * flow. When the grant lands, finish the flow here: read the page identity,
-   * probe, and enroll — or leave a visit-mode offer for the reopened popup.
+   * flow. When the grant lands, finish the flow here: probe (modern-first)
+   * and enroll — or leave a visit-mode offer for the reopened popup.
    */
   async function resumeEnrollmentAfterGrant(): Promise<void> {
     // A surviving popup owns the flow and clears the marker within ~2s.
@@ -604,24 +894,27 @@ export default defineBackground(() => {
       identity = undefined;
     }
 
-    if (!isPageIdentityResult(identity)) {
-      await writePendingEnrollment({ ...marker, state: 'visit-offer' });
-      return;
-    }
-
-    const report = await probeAdapter({
+    const report = await probeSite({
       origin: marker.origin,
-      userId: identity.userId,
-      identitySource: identity.identitySource,
+      ...(isPageIdentityResult(identity)
+        ? { userId: identity.userId, identitySource: identity.identitySource }
+        : {}),
       month: localMonthQuery(),
+      tabId,
     });
     if (
       !report.supported ||
       !report.adapterId ||
       !report.platform ||
+      !report.authMode ||
       !report.supportLevel ||
       !report.capabilities
     ) {
+      // A sign-in requirement is not "incompatible": no visit-mode offer.
+      if (report.reason === 'sign_in') {
+        await clearPendingEnrollment();
+        return;
+      }
       await writePendingEnrollment({ ...marker, state: 'visit-offer' });
       return;
     }
@@ -631,10 +924,11 @@ export default defineBackground(() => {
       enrollment: {
         origin: marker.origin,
         label: marker.label,
-        userId: identity.userId,
-        identitySource: identity.identitySource,
+        userId: report.userId,
+        identitySource: report.identitySource,
         adapterId: report.adapterId,
         platform: report.platform,
+        authMode: report.authMode,
         supportLevel: report.supportLevel,
         capabilities: report.capabilities,
       },
@@ -651,7 +945,15 @@ export default defineBackground(() => {
   browser.permissions.onAdded.addListener(() => void resumeEnrollmentAfterGrant());
 
   browser.runtime.onMessage.addListener(
-    (message: unknown, _sender, sendResponse: (response: AppResponse) => void) => {
+    (message: unknown, sender, sendResponse) => {
+      // Page-session PoW solving: strict target/type/taskId routing, and the
+      // listener returns true synchronously so the async response survives.
+      if (isPagePowSolveRequest(message) && sender.tab?.id !== undefined) {
+        handlePagePowSolve(sender.tab.id, message)
+          .catch((): PagePowSolveResponse => ({ status: 'error', elapsedMs: 0 }))
+          .then(sendResponse);
+        return true;
+      }
       if (!isAppRequest(message)) return false;
       handleAppRequest(message)
         .catch((error: unknown): AppResponse => {
@@ -682,7 +984,14 @@ export default defineBackground(() => {
   // The periodic tick survives service worker death and rolls the schedule day
   // past local midnight, which also prunes tombstones and stale retries on read.
   browser.alarms.create(DAILY_TICK_ALARM, { periodInMinutes: 30 });
-  browser.runtime.onInstalled.addListener(() => void ensureScheduleAndWake('startup'));
-  browser.runtime.onStartup.addListener(() => void ensureScheduleAndWake('startup'));
+  browser.runtime.onInstalled.addListener(() => {
+    void maybeSendAuthUpgradeNotice();
+    void ensureScheduleAndWake('startup');
+  });
+  browser.runtime.onStartup.addListener(() => {
+    void maybeSendAuthUpgradeNotice();
+    void ensureScheduleAndWake('startup');
+  });
+  void maybeSendAuthUpgradeNotice();
   void ensureScheduleAndWake('startup');
 });

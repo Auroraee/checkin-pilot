@@ -40,6 +40,7 @@ describe('single offscreen PoW worker controller', () => {
   it('accepts only bounded solve and targeted cancel messages', () => {
     expect(
       isOffscreenRequest({
+        target: 'offscreen',
         type: 'pow:solve',
         taskId: 'a',
         prefix: 'p',
@@ -47,15 +48,34 @@ describe('single offscreen PoW worker controller', () => {
         maxMs: 12_000,
       }),
     ).toBe(true);
-    expect(isOffscreenRequest({ type: 'pow:cancel', taskId: 'a' })).toBe(true);
+    expect(
+      isOffscreenRequest({
+        target: 'offscreen',
+        type: 'pow:cancel',
+        taskId: 'a',
+      }),
+    ).toBe(true);
     expect(isOffscreenRequest({ type: 'anything', taskId: 'a' })).toBe(false);
+    // Page-session solve requests target the background and must be ignored.
+    expect(
+      isOffscreenRequest({
+        target: 'background',
+        type: 'pow:solve',
+        tabId: 1,
+        taskId: 'a',
+        prefix: 'p',
+        difficulty: 18,
+        maxMs: 12_000,
+      }),
+    ).toBe(false);
   });
 
   it('returns the worker result and terminates it immediately', async () => {
     vi.stubGlobal('Worker', FakeWorker);
     const controller = new SinglePowWorkerController();
     const resultPromise = controller.solve({
-      type: 'pow:solve',
+      target: 'offscreen',
+        type: 'pow:solve',
       taskId: 'task-1',
       prefix: 'private',
       difficulty: 18,
@@ -87,7 +107,8 @@ describe('single offscreen PoW worker controller', () => {
     vi.stubGlobal('Worker', FakeWorker);
     const controller = new SinglePowWorkerController();
     const first = controller.solve({
-      type: 'pow:solve',
+      target: 'offscreen',
+        type: 'pow:solve',
       taskId: 'task-1',
       prefix: 'private',
       difficulty: 18,
@@ -95,6 +116,7 @@ describe('single offscreen PoW worker controller', () => {
     });
     await expect(
       controller.solve({
+        target: 'offscreen',
         type: 'pow:solve',
         taskId: 'task-2',
         prefix: 'other',
@@ -102,7 +124,8 @@ describe('single offscreen PoW worker controller', () => {
         maxMs: 1_000,
       }),
     ).resolves.toEqual({ status: 'error', elapsedMs: 0 });
-    expect(controller.cancel({ type: 'pow:cancel', taskId: 'task-1' })).toMatchObject({
+    expect(controller.cancel({ target: 'offscreen',
+        type: 'pow:cancel', taskId: 'task-1' })).toMatchObject({
       status: 'cancelled',
     });
     await expect(first).resolves.toMatchObject({ status: 'cancelled' });

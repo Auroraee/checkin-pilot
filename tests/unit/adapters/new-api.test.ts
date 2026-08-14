@@ -5,7 +5,9 @@ import {
   postCheckin,
   runNewApiCheckin,
 } from '../../../src/adapters/new-api';
+import { LegacySessionTransport } from '../../../src/auth/legacy-transport';
 import type { FetchLike } from '../../../src/adapters/types';
+import type { AuthTransport } from '../../../src/auth/types';
 
 const ORIGIN = 'https://panel.example';
 
@@ -14,6 +16,21 @@ function jsonResponse(body: unknown, status = 200, headers?: HeadersInit): Respo
     status,
     headers: { 'Content-Type': 'application/json', ...headers },
   });
+}
+
+function legacyContext(
+  userId: number,
+  fetcher: FetchLike,
+): { origin: string; userId: number; adapterId: 'new-api'; authMode: 'legacy-session'; month: string; transport: AuthTransport; fetch: FetchLike } {
+  return {
+    origin: ORIGIN,
+    userId,
+    adapterId: 'new-api',
+    authMode: 'legacy-session',
+    month: '2026-07',
+    transport: new LegacySessionTransport({ origin: ORIGIN, userId, fetch: fetcher }),
+    fetch: fetcher,
+  };
 }
 
 describe('New API legacy-session adapter', () => {
@@ -77,7 +94,7 @@ describe('New API legacy-session adapter', () => {
         }),
       );
     await expect(
-      runNewApiCheckin({ origin: ORIGIN, userId: 9, fetch: fetcher }),
+      runNewApiCheckin(legacyContext(9, fetcher)),
     ).resolves.toEqual({ code: 'already_checked', retryable: false });
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
@@ -98,7 +115,7 @@ describe('New API legacy-session adapter', () => {
         }),
       );
     await expect(
-      runNewApiCheckin({ origin: ORIGIN, userId: 9, fetch: fetcher }),
+      runNewApiCheckin(legacyContext(9, fetcher)),
     ).resolves.toMatchObject({
       code: 'action_required',
       actionReason: 'turnstile',

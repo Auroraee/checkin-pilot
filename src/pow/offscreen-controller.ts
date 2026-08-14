@@ -105,6 +105,7 @@ export class SinglePowWorkerController {
 export function isOffscreenRequest(value: unknown): value is OffscreenRequest {
   if (typeof value !== 'object' || value === null) return false;
   const candidate = value as Partial<OffscreenRequest>;
+  if (candidate.target !== 'offscreen') return false;
   if (candidate.type === 'pow:cancel') return typeof candidate.taskId === 'string';
   return (
     candidate.type === 'pow:solve' &&

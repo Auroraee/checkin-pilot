@@ -2,7 +2,7 @@ import {
   SERIAL_DELAY_MAX_MS,
   SERIAL_DELAY_MIN_MS,
 } from '../shared/constants';
-import type { SiteConfig, TriggerKind } from '../shared/domain';
+import type { CheckinRecord, SiteConfig, TriggerKind } from '../shared/domain';
 
 export interface SerialQueueOptions<T> {
   work: (site: SiteConfig, index: number) => Promise<T>;
@@ -18,12 +18,34 @@ export interface SerialQueueItem<T> {
 }
 
 export function isSiteEligibleForTrigger(site: SiteConfig, trigger: TriggerKind): boolean {
-  // An action_required binding still joins batches: one bounded attempt per
-  // run either confirms the user fixed it (state recovers to active) or
-  // leaves the state unchanged. Skipping would strand recovered sites.
   if (trigger === 'manual') return true;
   if (trigger === 'retry') return true;
   return site.enabled;
+}
+
+/**
+ * A same-origin-refresh site whose refresh/status returned 401 stops for the
+ * rest of its schedule day (one notification). The next scheduled batch tries
+ * it once again and auto-resumes after the user signs back in. Legacy sites
+ * paused with `auth_upgrade_required` stay out until the user updates them.
+ */
+export function isStoppedForTheDay(
+  site: SiteConfig,
+  records: readonly CheckinRecord[],
+  scheduleDay: string,
+): boolean {
+  if (site.binding.state !== 'action_required') return false;
+  if (site.binding.actionReason === 'auth_upgrade_required') return true;
+  if (site.binding.actionReason === 'sign_in' && site.authMode === 'same-origin-refresh') {
+    return records.some(
+      (record) =>
+        record.origin === site.origin &&
+        record.scheduleDay === scheduleDay &&
+        record.outcome === 'action_required' &&
+        record.actionReason === 'sign_in',
+    );
+  }
+  return false;
 }
 
 export function selectSitesForTrigger(

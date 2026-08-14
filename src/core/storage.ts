@@ -8,6 +8,7 @@ import {
   type RetryJob,
   type SiteConfig,
   type StorageState,
+  type UpgradeState,
 } from '../shared/domain';
 import { pruneHistory } from './history';
 import { clearExpiredPowLedgers } from './pow-ledger';
@@ -61,6 +62,8 @@ const ACTION_REASONS = [
   'unknown_challenge',
   'permission_missing',
   'rebind_required',
+  'auth_upgrade_required',
+  'identity_missing',
 ] as const;
 const ERROR_CODES = [
   'network',
@@ -78,6 +81,9 @@ const ERROR_CODES = [
   'schedule_day_ended',
   'unknown',
 ] as const;
+const AUTH_MODES = ['legacy-session', 'same-origin-refresh', 'none'] as const;
+const ADAPTER_IDS = ['new-api', 'runanytime', 'visit-open'] as const;
+const IDENTITY_SOURCES = ['uid', 'user.id', 'refresh'] as const;
 
 function sanitizeSite(value: unknown): SiteConfig | undefined {
   if (!isObject(value) || !isObject(value.binding) || !isObject(value.capabilities)) return undefined;
@@ -87,7 +93,8 @@ function sanitizeSite(value: unknown): SiteConfig | undefined {
     !isCanonicalHttpsOrigin(value.origin) ||
     typeof value.label !== 'string' ||
     !isOneOf(value.platform, ['new-api', 'runanytime', 'generic'] as const) ||
-    !isOneOf(value.adapterId, ['new-api-session', 'runanytime-pow', 'visit-open'] as const) ||
+    !isOneOf(value.adapterId, ADAPTER_IDS) ||
+    !isOneOf(value.authMode, AUTH_MODES) ||
     !isOneOf(value.supportLevel, ['detected', 'verified'] as const) ||
     typeof value.enabled !== 'boolean' ||
     typeof value.createdAt !== 'string' ||
@@ -96,7 +103,7 @@ function sanitizeSite(value: unknown): SiteConfig | undefined {
     typeof capabilities.statusEndpoint !== 'boolean' ||
     !Number.isInteger(binding.userId) ||
     Number(binding.userId) <= 0 ||
-    !isOneOf(binding.identitySource, ['uid', 'user.id'] as const) ||
+    !isOneOf(binding.identitySource, IDENTITY_SOURCES) ||
     typeof binding.generation !== 'string' ||
     typeof binding.boundAt !== 'string' ||
     !isOneOf(binding.state, ['active', 'action_required'] as const)
@@ -109,6 +116,7 @@ function sanitizeSite(value: unknown): SiteConfig | undefined {
     label: value.label,
     platform: value.platform,
     adapterId: value.adapterId,
+    authMode: value.authMode,
     supportLevel: value.supportLevel,
     enabled: value.enabled,
     createdAt: value.createdAt,
@@ -152,7 +160,7 @@ function sanitizeRecord(value: unknown): CheckinRecord | undefined {
     typeof value.scheduleDay !== 'string' ||
     typeof value.attemptedAt !== 'string' ||
     !isOneOf(value.trigger, ['scheduled', 'catchup', 'manual', 'run_all', 'retry'] as const) ||
-    !isOneOf(value.outcome, ['success', 'already_checked', 'action_required', 'failed', 'unsupported', 'cancelled'] as const) ||
+    !isOneOf(value.outcome, ['success', 'already_checked', 'action_required', 'failed', 'unsupported', 'cancelled', 'unverified'] as const) ||
     !Number.isFinite(value.durationMs) ||
     Number(value.durationMs) < 0 ||
     !Number.isInteger(value.retryCount) ||
@@ -277,9 +285,59 @@ function sanitizeMap<T>(
   return filtered;
 }
 
-/** Copies only schema fields, preventing unknown or secret-bearing fields from persisting. */
+function sanitizeUpgrade(value: unknown): UpgradeState {
+  const upgrade = isObject(value) ? value : {};
+  return { authUpgradeNoticeSent: upgrade.authUpgradeNoticeSent === true };
+}
+
+/**
+ * Explicit v1 → v2 migration. Every collection is carried over losslessly:
+ * settings, sites, history, schedules, retries and the PoW ledger. Sites gain
+ * an `authMode`; existing runanytime sites (which now require the modern
+ * same-origin-refresh login) are paused immediately with a one-time
+ * "update login method" notice, other sites keep legacy session auth.
+ */
+export function migrateV1ToV2(value: Record<string, unknown>): Record<string, unknown> {
+  const sites: Record<string, unknown> = {};
+  if (isObject(value.sites)) {
+    for (const [origin, rawSite] of Object.entries(value.sites)) {
+      if (!isObject(rawSite)) continue;
+      const adapterId = rawSite.adapterId;
+      if (adapterId === 'runanytime-pow') {
+        sites[origin] = {
+          ...rawSite,
+          adapterId: 'runanytime',
+          authMode: 'same-origin-refresh',
+          enabled: false,
+          binding: {
+            ...(isObject(rawSite.binding) ? rawSite.binding : {}),
+            state: 'action_required',
+            actionReason: 'auth_upgrade_required',
+          },
+        };
+      } else if (adapterId === 'visit-open') {
+        sites[origin] = { ...rawSite, adapterId: 'visit-open', authMode: 'none' };
+      } else {
+        sites[origin] = { ...rawSite, adapterId: 'new-api', authMode: 'legacy-session' };
+      }
+    }
+  }
+  return {
+    ...value,
+    schemaVersion: STORAGE_SCHEMA_VERSION,
+    sites,
+    upgrade: { authUpgradeNoticeSent: false },
+  };
+}
+
+/**
+ * Copies only schema fields, preventing unknown or secret-bearing fields from
+ * persisting. v1 states are migrated explicitly to v2 first.
+ */
 export function normalizeStorageState(value: unknown, now: Date = new Date()): StorageState {
-  if (!isObject(value) || value.schemaVersion !== STORAGE_SCHEMA_VERSION) {
+  if (!isObject(value)) return createDefaultState();
+  const migrated = value.schemaVersion === 1 ? migrateV1ToV2(value) : value;
+  if (migrated.schemaVersion !== STORAGE_SCHEMA_VERSION) {
     return createDefaultState();
   }
 
@@ -299,23 +357,24 @@ export function normalizeStorageState(value: unknown, now: Date = new Date()): S
       : { ...DEFAULT_SETTINGS };
 
   const scheduleDay = localScheduleDay(now);
-  const activeBatch = sanitizeBatch(value.activeBatch);
+  const activeBatch = sanitizeBatch(migrated.activeBatch);
   const state: StorageState = {
     schemaVersion: STORAGE_SCHEMA_VERSION,
     settings,
-    sites: sanitizeMap(value.sites, sanitizeSite, (site) => site.origin),
-    records: Array.isArray(value.records)
-      ? value.records.map(sanitizeRecord).filter((record): record is CheckinRecord => record !== undefined)
+    sites: sanitizeMap(migrated.sites, sanitizeSite, (site) => site.origin),
+    records: Array.isArray(migrated.records)
+      ? migrated.records.map(sanitizeRecord).filter((record): record is CheckinRecord => record !== undefined)
       : [],
-    schedules: sanitizeMap(value.schedules, sanitizeSchedule, (schedule) => schedule.scheduleDay),
-    retries: Array.isArray(value.retries)
-      ? value.retries.map(sanitizeRetry).filter((retry): retry is RetryJob => retry !== undefined)
+    schedules: sanitizeMap(migrated.schedules, sanitizeSchedule, (schedule) => schedule.scheduleDay),
+    retries: Array.isArray(migrated.retries)
+      ? migrated.retries.map(sanitizeRetry).filter((retry): retry is RetryJob => retry !== undefined)
       : [],
     powLedgers: sanitizeMap(
-      value.powLedgers,
+      migrated.powLedgers,
       sanitizeLedger,
       (ledger) => `${ledger.origin}\n${ledger.scheduleDay}`,
     ),
+    upgrade: sanitizeUpgrade(migrated.upgrade),
   };
   if (activeBatch && activeBatch.scheduleDay === scheduleDay) state.activeBatch = activeBatch;
 

@@ -1,14 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   decideRunanytimeSecurity,
-  fetchRunanytimeChallenge,
   RUNANYTIME_ORIGIN,
   runRunanytimeCheckin,
 } from '../../../src/adapters/runanytime';
+import { LegacySessionTransport } from '../../../src/auth/legacy-transport';
 import type {
   FetchLike,
   PublicSiteStatus,
 } from '../../../src/adapters/types';
+import type { AuthTransport } from '../../../src/auth/types';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -27,6 +28,37 @@ function status(overrides: Partial<PublicSiteStatus>): PublicSiteStatus {
   };
 }
 
+interface RunanytimeTestContext {
+  origin: string;
+  userId: number;
+  adapterId: 'runanytime';
+  authMode: 'legacy-session';
+  month: string;
+  fetch: FetchLike;
+  transport: AuthTransport;
+}
+
+function legacyContext(
+  userId: number,
+  fetcher: FetchLike,
+  options: Partial<ConstructorParameters<typeof LegacySessionTransport>[0]> = {},
+): RunanytimeTestContext {
+  return {
+    origin: RUNANYTIME_ORIGIN,
+    userId,
+    adapterId: 'runanytime',
+    authMode: 'legacy-session',
+    month: '2026-07',
+    fetch: fetcher,
+    transport: new LegacySessionTransport({
+      origin: RUNANYTIME_ORIGIN,
+      userId,
+      fetch: fetcher,
+      ...options,
+    }),
+  };
+}
+
 describe('runanytime private PoW adapter', () => {
   it.each([
     [status({ powMode: 'replace', turnstileCheck: true }), 'pow'],
@@ -42,29 +74,52 @@ describe('runanytime private PoW adapter', () => {
 
   it('gets the challenge with session auth headers and validates its bounds', async () => {
     const acquired = vi.fn();
-    const fetcher = vi.fn<FetchLike>().mockResolvedValue(
-      jsonResponse({
-        success: true,
-        data: { challenge_id: 'challenge-1', prefix: 'prefix:', difficulty: 18 },
-      }),
+    // A fresh Response per call: a fetch body can only be read once.
+    const fetcher = vi.fn<FetchLike>().mockImplementation(() =>
+      Promise.resolve(
+        jsonResponse({
+          success: true,
+          data: { challenge_id: 'challenge-1', prefix: 'prefix:', difficulty: 18 },
+        }),
+      ),
     );
-    await expect(
-      fetchRunanytimeChallenge({
-        origin: RUNANYTIME_ORIGIN,
-        userId: 21,
-        fetch: fetcher,
-        onPowChallengeAcquired: acquired,
+    const context = legacyContext(21, fetcher, {
+      powMaxMs: 500,
+      solvePow: vi.fn().mockResolvedValue({
+        status: 'solved',
+        nonce: '0000000f',
+        elapsedMs: 5,
       }),
-    ).resolves.toEqual({
-      ok: true,
-      value: { challengeId: 'challenge-1', prefix: 'prefix:', difficulty: 18 },
+      onPowChallengeAcquired: acquired,
     });
-    const [input, init] = fetcher.mock.calls[0] ?? [];
-    expect(String(input)).toBe(
+    // Replace the shared fetcher: status + status-check + challenge + submit.
+    fetcher
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            checkin_enabled: true,
+            pow_enabled: true,
+            pow_mode: 'replace',
+            turnstile_check: true,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { stats: { checked_in_today: false } } }),
+      );
+    await expect(runRunanytimeCheckin(context)).resolves.toMatchObject({
+      code: 'success',
+    });
+    const challengeCall = fetcher.mock.calls.find(
+      ([input]) => String(input).includes('/api/user/pow/challenge'),
+    );
+    const [challengeInput, challengeInit] = challengeCall ?? [];
+    expect(String(challengeInput)).toBe(
       `${RUNANYTIME_ORIGIN}/api/user/pow/challenge?action=checkin`,
     );
-    expect(init?.credentials).toBe('include');
-    const headers = new Headers(init?.headers);
+    expect(challengeInit?.credentials).toBe('include');
+    const headers = new Headers(challengeInit?.headers);
     expect(headers.get('New-Api-User')).toBe('21');
     expect(headers.has('Authorization')).toBe(false);
     expect(acquired).toHaveBeenCalledOnce();
@@ -72,22 +127,40 @@ describe('runanytime private PoW adapter', () => {
 
   it('counts an acquired challenge before rejecting difficulty outside 10 through 20', async () => {
     const acquired = vi.fn();
-    const fetcher = vi.fn<FetchLike>().mockResolvedValue(
-      jsonResponse({
-        success: true,
-        data: { challenge_id: 'challenge-1', prefix: 'prefix:', difficulty: 21 },
-      }),
-    );
+    const fetcher = vi
+      .fn<FetchLike>()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            checkin_enabled: true,
+            pow_enabled: true,
+            pow_mode: 'replace',
+            turnstile_check: true,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { stats: { checked_in_today: false } } }),
+      )
+      .mockResolvedValue(
+        jsonResponse({
+          success: true,
+          data: { challenge_id: 'challenge-1', prefix: 'prefix:', difficulty: 21 },
+        }),
+      );
     await expect(
-      fetchRunanytimeChallenge({
-        origin: RUNANYTIME_ORIGIN,
-        userId: 21,
-        fetch: fetcher,
-        onPowChallengeAcquired: acquired,
-      }),
+      runRunanytimeCheckin(
+        legacyContext(21, fetcher, {
+          powMaxMs: 500,
+          solvePow: vi.fn(),
+          onPowChallengeAcquired: acquired,
+        }),
+      ),
     ).resolves.toMatchObject({
-      ok: false,
-      outcome: { errorCode: 'pow_difficulty_out_of_range', retryable: false },
+      code: 'failed',
+      errorCode: 'pow_difficulty_out_of_range',
+      retryable: false,
     });
     expect(acquired).toHaveBeenCalledOnce();
   });
@@ -114,12 +187,9 @@ describe('runanytime private PoW adapter', () => {
       );
     const solve = vi.fn();
     await expect(
-      runRunanytimeCheckin({
-        origin: RUNANYTIME_ORIGIN,
-        userId: 5,
-        fetch: fetcher,
-        solvePow: solve,
-      }),
+      runRunanytimeCheckin(
+        legacyContext(5, fetcher, { powMaxMs: 500, solvePow: solve }),
+      ),
     ).resolves.toMatchObject({
       code: 'action_required',
       actionReason: 'turnstile',
@@ -149,13 +219,9 @@ describe('runanytime private PoW adapter', () => {
         }),
       );
     await expect(
-      runRunanytimeCheckin({
-        origin: RUNANYTIME_ORIGIN,
-        userId: 5,
-        fetch: fetcher,
-        solvePow: vi.fn(),
-        powMaxMs: 0,
-      }),
+      runRunanytimeCheckin(
+        legacyContext(5, fetcher, { powMaxMs: 0, solvePow: vi.fn() }),
+      ),
     ).resolves.toMatchObject({
       code: 'action_required',
       actionReason: 'unknown_challenge',
@@ -204,15 +270,14 @@ describe('runanytime private PoW adapter', () => {
     });
 
     await expect(
-      runRunanytimeCheckin({
-        origin: RUNANYTIME_ORIGIN,
-        userId: 5,
-        fetch: fetcher,
-        solvePow,
-        powMaxMs: 500,
-        onPowChallengeAcquired: acquired,
-        onPowWorkerUsed: workerUsed,
-      }),
+      runRunanytimeCheckin(
+        legacyContext(5, fetcher, {
+          powMaxMs: 500,
+          solvePow,
+          onPowChallengeAcquired: acquired,
+          onPowWorkerUsed: workerUsed,
+        }),
+      ),
     ).resolves.toEqual({ code: 'success', reward: '3', retryable: false });
     expect(solvePow).toHaveBeenCalledWith({
       prefix: 'private-prefix',
@@ -278,14 +343,13 @@ describe('runanytime private PoW adapter', () => {
     const acquired = vi.fn();
 
     await expect(
-      runRunanytimeCheckin({
-        origin: RUNANYTIME_ORIGIN,
-        userId: 5,
-        fetch: fetcher,
-        solvePow: solver,
-        getPowAttemptBudget: budget,
-        onPowChallengeAcquired: acquired,
-      }),
+      runRunanytimeCheckin(
+        legacyContext(5, fetcher, {
+          solvePow: solver,
+          getPowAttemptBudget: budget,
+          onPowChallengeAcquired: acquired,
+        }),
+      ),
     ).resolves.toMatchObject({ code: 'success' });
     expect(checkinGets).toBe(2);
     expect(challengeGets).toBe(2);
@@ -328,15 +392,14 @@ describe('runanytime private PoW adapter', () => {
       .mockReturnValueOnce({ allowed: false, maxMs: 0 });
 
     await expect(
-      runRunanytimeCheckin({
-        origin: RUNANYTIME_ORIGIN,
-        userId: 5,
-        fetch: fetcher,
-        solvePow: vi
-          .fn()
-          .mockResolvedValue({ status: 'timeout', elapsedMs: 100 }),
-        getPowAttemptBudget: budget,
-      }),
+      runRunanytimeCheckin(
+        legacyContext(5, fetcher, {
+          solvePow: vi
+            .fn()
+            .mockResolvedValue({ status: 'timeout', elapsedMs: 100 }),
+          getPowAttemptBudget: budget,
+        }),
+      ),
     ).resolves.toMatchObject({
       code: 'action_required',
       actionReason: 'unknown_challenge',

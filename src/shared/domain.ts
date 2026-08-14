@@ -1,10 +1,19 @@
-export const STORAGE_SCHEMA_VERSION = 1 as const;
+export const STORAGE_SCHEMA_VERSION = 2 as const;
 
 export type PlatformFamily = 'new-api' | 'runanytime' | 'generic';
-export type AdapterId = 'new-api-session' | 'runanytime-pow' | 'visit-open';
+export type AdapterId = 'new-api' | 'runanytime' | 'visit-open';
 export type SupportLevel = 'detected' | 'verified';
-export type IdentitySource = 'uid' | 'user.id';
+export type IdentitySource = 'uid' | 'user.id' | 'refresh';
 export type PowMode = 'replace' | 'supplement' | 'fallback' | 'unknown';
+
+/**
+ * Independent authentication modes. Protocol adapters are decoupled from the
+ * auth method: `legacy-session` keeps the Cookie + `New-Api-User` path,
+ * `same-origin-refresh` performs `/api/user/auth/refresh` inside an ISOLATED
+ * world of an exact same-origin tab (the bearer token never leaves the page
+ * context), and `none` covers visit mode where no authenticated API is used.
+ */
+export type AuthMode = 'legacy-session' | 'same-origin-refresh' | 'none';
 
 export type TriggerKind =
   | 'scheduled'
@@ -19,7 +28,8 @@ export type OutcomeCode =
   | 'action_required'
   | 'failed'
   | 'unsupported'
-  | 'cancelled';
+  | 'cancelled'
+  | 'unverified';
 
 export type ActionReason =
   | 'sign_in'
@@ -28,7 +38,9 @@ export type ActionReason =
   | 'captcha'
   | 'unknown_challenge'
   | 'permission_missing'
-  | 'rebind_required';
+  | 'rebind_required'
+  | 'auth_upgrade_required'
+  | 'identity_missing';
 
 export type RedactedErrorCode =
   | 'network'
@@ -72,6 +84,7 @@ export interface SiteConfig {
   label: string;
   platform: PlatformFamily;
   adapterId: AdapterId;
+  authMode: AuthMode;
   supportLevel: SupportLevel;
   enabled: boolean;
   createdAt: string;
@@ -137,6 +150,11 @@ export interface PowLedger {
   removedSiteTombstone: boolean;
 }
 
+/** One-time migration flags; v2 introduces the auth-mode upgrade notice. */
+export interface UpgradeState {
+  authUpgradeNoticeSent: boolean;
+}
+
 export interface StorageState {
   schemaVersion: typeof STORAGE_SCHEMA_VERSION;
   settings: GlobalSettings;
@@ -146,6 +164,7 @@ export interface StorageState {
   activeBatch?: BatchJob;
   retries: RetryJob[];
   powLedgers: Record<string, PowLedger>;
+  upgrade: UpgradeState;
 }
 
 export interface NormalizedOutcome {
@@ -164,6 +183,7 @@ export interface ProbeReport {
   supported: boolean;
   adapterId?: AdapterId;
   platform?: PlatformFamily;
+  authMode?: AuthMode;
   supportLevel?: SupportLevel;
   capabilities?: SiteCapabilities;
   checkedInToday?: boolean;

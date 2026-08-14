@@ -28,6 +28,7 @@ export async function solvePowOffscreen(
     };
     input.signal?.addEventListener('abort', abortHandler, { once: true });
     const request: OffscreenRequest = {
+      target: 'offscreen',
       type: 'pow:solve',
       taskId,
       prefix: input.prefix,
@@ -57,7 +58,7 @@ export async function cancelActivePow(): Promise<void> {
 }
 
 export async function cancelPowOffscreen(taskId: string): Promise<void> {
-  const request: OffscreenRequest = { type: 'pow:cancel', taskId };
+  const request: OffscreenRequest = { target: 'offscreen', type: 'pow:cancel', taskId };
   try {
     await chrome.runtime.sendMessage(request);
   } catch {

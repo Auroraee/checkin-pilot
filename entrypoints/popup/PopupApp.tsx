@@ -39,7 +39,16 @@ import { useAppSnapshot } from '../../src/ui/useAppSnapshot';
 import { useI18n } from '../../src/ui/i18n';
 
 type PendingEnrollment =
-  | { kind: 'rebind'; page: EnrollmentPage; existing: SiteView }
+  | {
+      kind: 'rebind';
+      page: EnrollmentPage;
+      existing: SiteView;
+      authMode?: EnrollmentConfirmation['authMode'];
+      adapterId?: EnrollmentConfirmation['adapterId'];
+      platform?: EnrollmentConfirmation['platform'];
+      supportLevel?: EnrollmentConfirmation['supportLevel'];
+      capabilities?: EnrollmentConfirmation['capabilities'];
+    }
   | { kind: 'visit'; tab: ActiveTabPage };
 
 type BusyAction = 'probe' | 'confirm' | 'batch' | string;
@@ -48,12 +57,40 @@ function pendingOrigin(pending: PendingEnrollment): string {
   return pending.kind === 'rebind' ? pending.page.origin : pending.tab.origin;
 }
 
+function enrollmentFromReport(
+  tab: ActiveTabPage,
+  report: ProbeReport,
+): EnrollmentConfirmation {
+  if (
+    !report.adapterId ||
+    !report.platform ||
+    !report.authMode ||
+    !report.supportLevel ||
+    !report.capabilities ||
+    !(report.userId > 0)
+  ) {
+    throw new Error('invalid_probe_response');
+  }
+  return {
+    origin: tab.origin,
+    label: tab.label,
+    userId: report.userId,
+    identitySource: report.identitySource,
+    adapterId: report.adapterId,
+    platform: report.platform,
+    authMode: report.authMode,
+    supportLevel: report.supportLevel,
+    capabilities: report.capabilities,
+  };
+}
+
 export function PopupApp() {
   const { t } = useI18n();
   const { snapshot, loading, errorCode: snapshotError, request } = useAppSnapshot();
   const [busy, setBusy] = useState<BusyAction>();
   const [pending, setPending] = useState<PendingEnrollment>();
   const [message, setMessage] = useState<{ tone: 'success' | 'warning' | 'danger'; text: string }>();
+  const [activeOrigin, setActiveOrigin] = useState<string>();
   const resumedRef = useRef(false);
 
   // Picks up an enrollment interrupted by the permission dialog: either the
@@ -84,25 +121,20 @@ export function PopupApp() {
     })();
   }, [snapshot, t]);
 
-  const clearMessage = () => setMessage(undefined);
+  // The primary button is renamed to "Update current site" when the active
+  // tab already belongs to a configured site (the update entry point).
+  useEffect(() => {
+    void (async () => {
+      try {
+        const tab = await inspectActiveTab();
+        setActiveOrigin(tab.origin);
+      } catch {
+        setActiveOrigin(undefined);
+      }
+    })();
+  }, []);
 
-  const confirmApiEnrollment = async (page: EnrollmentPage, report: ProbeReport) => {
-    if (!report.adapterId || !report.platform || !report.supportLevel || !report.capabilities) {
-      throw new Error('invalid_probe_response');
-    }
-    const enrollment: EnrollmentConfirmation = {
-      origin: page.origin,
-      label: page.label,
-      userId: page.userId,
-      identitySource: page.identitySource,
-      adapterId: report.adapterId,
-      platform: report.platform,
-      supportLevel: report.supportLevel,
-      capabilities: report.capabilities,
-    };
-    const response = await request({ type: 'site:confirm', enrollment });
-    if (!response.ok) throw new Error(response.errorCode);
-  };
+  const clearMessage = () => setMessage(undefined);
 
   const addCurrentSite = async () => {
     setBusy('probe');
@@ -112,12 +144,8 @@ export function PopupApp() {
     try {
       tab = await inspectActiveTab();
       const existing = snapshot?.sites.find((site) => site.origin === tab?.origin);
-      if (existing?.adapterId === 'visit-open') {
-        setMessage({ tone: 'success', text: t('alreadyAdded') });
-        return;
-      }
 
-      let page: EnrollmentPage;
+      let page: EnrollmentPage | undefined;
       try {
         // If the permission dialog closes this popup, the background resumes
         // the flow from this marker; a surviving popup reclaims it right after.
@@ -132,47 +160,85 @@ export function PopupApp() {
         await clearPendingEnrollment();
       } catch (identityError) {
         await clearPendingEnrollment();
-        // A signed-in page without a readable account number can still be
-        // useful through visit mode, where no identity is required.
+        // A signed-in page without a readable account number can still probe
+        // through the modern refresh flow (the account comes from the token
+        // refresh); only the legacy fallback needs the MAIN-world identity.
         if (
-          identityError instanceof EnrollmentError &&
-          (identityError.code === 'identity_missing' || identityError.code === 'script_failed') &&
-          !existing
+          !(
+            identityError instanceof EnrollmentError &&
+            (identityError.code === 'identity_missing' || identityError.code === 'script_failed')
+          )
         ) {
-          setPending({ kind: 'visit', tab });
-          return;
+          throw identityError;
         }
-        throw identityError;
       }
 
       const response = await request({
         type: 'site:probe',
-        origin: page.origin,
-        userId: page.userId,
-        identitySource: page.identitySource,
+        origin: tab.origin,
+        ...(page ? { userId: page.userId, identitySource: page.identitySource } : {}),
+        tabId: tab.tabId,
       });
       if (!response.ok) throw new Error(response.errorCode);
       if (response.type !== 'probe') throw new Error('invalid_probe_response');
 
-      if (!response.report.supported) {
+      const report = response.report;
+      if (!report.supported) {
+        if (report.reason === 'sign_in') {
+          // 401 means "sign in", never "incompatible".
+          setMessage({ tone: 'warning', text: t('errorAuth') });
+          return;
+        }
+        if (report.reason === 'identity_missing') {
+          setMessage({ tone: 'warning', text: t('errorIdentity') });
+          return;
+        }
         if (existing) {
           setMessage({ tone: 'warning', text: t('unsupportedDetails') });
-        } else {
-          setPending({ kind: 'visit', tab });
+          return;
         }
+        // Unsupported protocol or an unknown private challenge: the user may
+        // pick the visit access mode instead.
+        setPending({ kind: 'visit', tab });
         return;
       }
 
       if (existing) {
-        if (existing.binding.userId === page.userId) {
-          setMessage({ tone: 'success', text: t('alreadyAdded') });
+        if (existing.binding.userId === report.userId) {
+          const upgrade = await request({
+            type: 'site:upgrade',
+            enrollment: enrollmentFromReport(tab, report),
+          });
+          if (!upgrade.ok) throw new Error(upgrade.errorCode);
+          setMessage({ tone: 'success', text: t('siteUpdated') });
         } else {
-          setPending({ kind: 'rebind', page, existing });
+          // The signed-in account changed; a separately confirmed rebind is
+          // required, carrying the newly detected auth fields.
+          setPending({
+            kind: 'rebind',
+            page: {
+              origin: tab.origin,
+              originPattern: tab.originPattern,
+              label: tab.label,
+              userId: report.userId,
+              identitySource: report.identitySource,
+            },
+            existing,
+            ...(report.authMode ? { authMode: report.authMode } : {}),
+            ...(report.adapterId ? { adapterId: report.adapterId } : {}),
+            ...(report.platform ? { platform: report.platform } : {}),
+            ...(report.supportLevel ? { supportLevel: report.supportLevel } : {}),
+            ...(report.capabilities ? { capabilities: report.capabilities } : {}),
+          });
         }
         return;
       }
 
-      await confirmApiEnrollment(page, response.report);
+      const confirm = await request({
+        type: 'site:confirm',
+        enrollment: enrollmentFromReport(tab, report),
+      });
+      if (!confirm.ok) throw new Error(confirm.errorCode);
       setMessage({ tone: 'success', text: t('siteAdded') });
     } catch (error) {
       if (tab && !snapshot?.sites.some((site) => site.origin === tab?.origin)) {
@@ -202,6 +268,11 @@ export function PopupApp() {
           origin: pending.page.origin,
           userId: pending.page.userId,
           identitySource: pending.page.identitySource,
+          ...(pending.authMode ? { authMode: pending.authMode } : {}),
+          ...(pending.adapterId ? { adapterId: pending.adapterId } : {}),
+          ...(pending.platform ? { platform: pending.platform } : {}),
+          ...(pending.supportLevel ? { supportLevel: pending.supportLevel } : {}),
+          ...(pending.capabilities ? { capabilities: pending.capabilities } : {}),
         });
         if (!response.ok) throw new Error(response.errorCode);
       } else {
@@ -212,6 +283,7 @@ export function PopupApp() {
           identitySource: 'uid',
           adapterId: 'visit-open',
           platform: 'generic',
+          authMode: 'none',
           supportLevel: 'detected',
           capabilities: { checkin: true, statusEndpoint: false },
         };
@@ -258,14 +330,18 @@ export function PopupApp() {
         ? 'success'
         : response.outcome.code === 'action_required'
           ? 'warning'
-          : 'danger';
+          : response.outcome.code === 'unverified'
+            ? 'warning'
+            : 'danger';
       const text = response.outcome.code === 'success'
         ? t('success')
         : response.outcome.code === 'already_checked'
           ? t('alreadyChecked')
           : response.outcome.code === 'action_required'
             ? t('challengeRequired')
-            : t(errorTranslationKey(response.outcome.errorCode));
+            : response.outcome.code === 'unverified'
+              ? t('statusUnverified')
+              : t(errorTranslationKey(response.outcome.errorCode));
       setMessage({ tone, text });
     }
     setBusy(undefined);
@@ -274,6 +350,7 @@ export function PopupApp() {
   const enabledCount = snapshot?.sites.filter((site) => site.enabled).length ?? 0;
   // Card-level busy is scoped per origin; only probe/confirm/batch freeze every card.
   const globalBusy = busy === 'probe' || busy === 'confirm' || busy === 'batch';
+  const onSitePage = Boolean(activeOrigin && snapshot?.sites.some((site) => site.origin === activeOrigin));
 
   return (
     <main className="popup-shell">
@@ -294,7 +371,7 @@ export function PopupApp() {
               onClick={() => void addCurrentSite()}
               disabled={Boolean(busy)}
             >
-              {busy === 'probe' ? t('probing') : t('addCurrentSite')}
+              {busy === 'probe' ? t('probing') : onSitePage ? t('updateCurrentSite') : t('addCurrentSite')}
             </Button>
             <Button
               variant="secondary"
@@ -305,6 +382,7 @@ export function PopupApp() {
               {busy === 'batch' ? t('running') : t('runAllShort')}
             </Button>
           </div>
+          <p className="auth-boundary-hint">{t('authBoundaryHint')}</p>
 
           <ScheduleCard
             nextBatchAt={snapshot.nextBatchAt}

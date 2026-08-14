@@ -8,6 +8,7 @@ const badgeByOutcome: Partial<
   already_checked: { text: '✓', color: '#087f5b' },
   action_required: { text: '!', color: '#b45309' },
   failed: { text: '×', color: '#b42318' },
+  unverified: { text: '?', color: '#6b7280' },
 };
 
 export async function setOutcomeBadge(outcome?: OutcomeCode): Promise<void> {
