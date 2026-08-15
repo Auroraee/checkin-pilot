@@ -36,8 +36,8 @@ export function OptionsApp() {
   const [busy, setBusy] = useState<string>();
   const [notice, setNotice] = useState<{ tone: 'success' | 'warning' | 'danger'; text: string }>();
   const [validationError, setValidationError] = useState<string>();
-  // chrome://extensions embeds this page in an iframe where window.confirm()
-  // is silently blocked, so removal confirmation must live in the page itself.
+  // Keep removal confirmation in the page itself so the flow works both when
+  // the options page opens in a tab and when Chrome renders it embedded.
   const [removeCandidate, setRemoveCandidate] = useState<string>();
 
   useEffect(() => {

@@ -48,6 +48,10 @@ body {
 .options-content,
 .settings-section {
   display: grid;
+  /* Keep grid tracks from expanding past the viewport when a child (e.g. the
+     history table) has a large intrinsic width. */
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
 }
 
 .options-content {
