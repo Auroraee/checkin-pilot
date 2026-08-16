@@ -267,6 +267,7 @@ export default defineBackground(() => {
       }
 
       const durationMs = Date.now() - startedAt;
+      let retryScheduled = false;
       await repo.update((draft) => {
         const current = draft.sites[origin];
         if (!current) return;
@@ -316,6 +317,7 @@ export default defineBackground(() => {
             outcome,
           });
           if (job) {
+            retryScheduled = true;
             draft.retries = [...draft.retries.filter((existing) => existing.id !== job.id), job];
             scheduleRetryAlarm(job.id, job.dueAt);
           }
@@ -323,16 +325,17 @@ export default defineBackground(() => {
       });
 
       const settings = (await repo.read()).settings;
-      // "Notify only once per day" for a repeated action-required condition.
+      // "Notify only once per day" for a repeated action-required or failure condition.
       const alreadyNotified = priorRecords.some(
         (record) =>
           record.origin === origin &&
           record.scheduleDay === attemptDay &&
           record.outcome === outcome.code &&
-          record.actionReason === outcome.actionReason,
+          record.actionReason === outcome.actionReason &&
+          record.errorCode === outcome.errorCode,
       );
       if (!alreadyNotified) {
-        await notifyForOutcome(site, outcome, settings).catch(() => undefined);
+        await notifyForOutcome(site, outcome, settings, retryScheduled).catch(() => undefined);
       }
       await setOutcomeBadge(outcome.code).catch(() => undefined);
       safeLog('info', 'checkin', {
@@ -588,12 +591,24 @@ export default defineBackground(() => {
       scheduleRetryAlarm(job.id, job.dueAt);
       return;
     }
+    // A site mid-check-in keeps its retry: re-arm briefly instead of burning it.
+    if (runningOrigins.has(job.origin)) {
+      scheduleRetryAlarm(job.id, new Date(Date.now() + 60_000).toISOString());
+      return;
+    }
+    const site = state.sites[job.origin];
+    if (!site || site.binding.generation !== job.bindingGeneration) {
+      await repo.update((draft) => {
+        draft.retries = draft.retries.filter((candidate) => candidate.id !== jobId);
+      });
+      return;
+    }
+    await executeCheckin(job.origin, 'retry', job.retryCount, job.originalTrigger);
+    // Consume the job only after the attempt: a service-worker death mid-run
+    // leaves a due job that the next wake re-arms and replays safely.
     await repo.update((draft) => {
       draft.retries = draft.retries.filter((candidate) => candidate.id !== jobId);
     });
-    const site = state.sites[job.origin];
-    if (!site || site.binding.generation !== job.bindingGeneration) return;
-    await executeCheckin(job.origin, 'retry', job.retryCount, job.originalTrigger);
   }
 
   function isValidEnrollment(enrollment: unknown): enrollment is EnrollmentConfirmation {
@@ -790,6 +805,9 @@ export default defineBackground(() => {
       }
 
       case 'site:remove': {
+        if (!validateOrigin(request.origin)) {
+          return { ok: false, errorCode: 'invalid_request' };
+        }
         const before = await repo.read();
         for (const job of before.retries) {
           if (job.origin === request.origin) {

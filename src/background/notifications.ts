@@ -82,10 +82,15 @@ function notificationId(origin: string): string {
   return `${NOTIFICATION_PREFIX}${encodeURIComponent(origin)}`;
 }
 
+/**
+ * A retryable failure only notifies when no retry job follows it, so the
+ * "final bounded attempt" message matches the attempts actually left.
+ */
 export async function notifyForOutcome(
   site: SiteConfig,
   outcome: NormalizedOutcome,
   settings: GlobalSettings,
+  willRetry = false,
 ): Promise<void> {
   const copy = copyForCurrentLocale();
   let title: string | undefined;
@@ -94,7 +99,7 @@ export async function notifyForOutcome(
   if (outcome.code === 'action_required') {
     title = copy.actionTitle;
     message = actionBodyForReason(outcome.actionReason);
-  } else if (outcome.code === 'failed' && !outcome.retryable) {
+  } else if (outcome.code === 'failed' && (!outcome.retryable || !willRetry)) {
     title = copy.failureTitle;
     message = copy.failureBody;
   } else if (

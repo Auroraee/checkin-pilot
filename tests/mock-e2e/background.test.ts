@@ -2,6 +2,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createDefaultState, STORAGE_KEY } from '../../src/shared/constants';
 import type {
   CheckinRecord,
+  RetryJob,
   SiteConfig,
   StorageState,
 } from '../../src/shared/domain';
@@ -392,6 +393,88 @@ describe('runanytime private PoW', () => {
     });
     const response = await harness.manualCheckin(RUNANYTIME);
     expect((response as { outcome: { code: string } }).outcome.code).toBe('already_checked');
+    harness.assertSentinelConfined();
+  });
+});
+
+describe('retry notifications', () => {
+  function retryJob(overrides: Partial<RetryJob> = {}): RetryJob {
+    return {
+      id: `${PANEL}:${TODAY}:generation-a:2`,
+      origin: PANEL,
+      bindingGeneration: 'generation-a',
+      scheduleDay: TODAY,
+      retryCount: 2,
+      dueAt: new Date(Date.now() - 1_000).toISOString(),
+      originalTrigger: 'scheduled',
+      ...overrides,
+    };
+  }
+
+  async function startWithRetry(job: RetryJob): Promise<void> {
+    harness.reset();
+    harness.server.setConfig({
+      status: { success: true, data: { checkin_enabled: true, turnstile_check: false, pow_enabled: false, pow_mode: 'unknown' } },
+      checkin: 'unchecked',
+      submit: 'invalid',
+    } as never);
+    harness.browser.grant(PANEL);
+    await harness.startBackground();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const state = seededState([site()]);
+    state.retries = [job];
+    await seedState(state);
+  }
+
+  function fireRetryAlarm(jobId: string): void {
+    const listener = harness.browser.alarmListeners.listeners.at(-1) as
+      | ((alarm: { name: string }) => unknown)
+      | undefined;
+    if (!listener) throw new Error('no alarm listener registered');
+    listener({ name: `checkin-pilot:retry:${jobId}` });
+  }
+
+  async function waitFor(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (!condition()) {
+      if (Date.now() > deadline) throw new Error('timed out waiting for condition');
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+
+  it('notifies when the final bounded retry fails', async () => {
+    const job = retryJob({ retryCount: 2 });
+    await startWithRetry(job);
+    fireRetryAlarm(job.id);
+    await waitFor(() => (harness.state as StorageState).retries.length === 0);
+    await waitFor(() => harness.browser.notifications.length > 0);
+    const stored = harness.state as StorageState;
+    expect(stored.records[0]).toMatchObject({
+      outcome: 'failed',
+      errorCode: 'server_error',
+      trigger: 'retry',
+      retryCount: 2,
+    });
+    // No further retry follows, so this failure is final and must surface.
+    expect(stored.retries).toEqual([]);
+    expect(
+      harness.browser.notifications.some((notification) => notification.title === '签到失败'),
+    ).toBe(true);
+    harness.assertSentinelConfined();
+  });
+
+  it('stays silent while another retry is still scheduled', async () => {
+    const job = retryJob({
+      id: `${PANEL}:${TODAY}:generation-a:1`,
+      retryCount: 1,
+    });
+    await startWithRetry(job);
+    fireRetryAlarm(job.id);
+    await waitFor(() => (harness.state as StorageState).retries.some((candidate) => candidate.retryCount === 2));
+    expect(harness.browser.notifications).toEqual([]);
+    const stored = harness.state as StorageState;
+    expect(stored.retries).toHaveLength(1);
+    expect(stored.retries[0]).toMatchObject({ retryCount: 2, originalTrigger: 'scheduled' });
     harness.assertSentinelConfined();
   });
 });
