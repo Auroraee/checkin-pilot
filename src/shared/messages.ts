@@ -30,7 +30,6 @@ export type AppRequest =
       origin: string;
       userId?: number;
       identitySource?: IdentitySource;
-      tabId?: number;
     }
   | { type: 'site:confirm'; enrollment: EnrollmentConfirmation }
   | { type: 'site:upgrade'; enrollment: EnrollmentConfirmation }

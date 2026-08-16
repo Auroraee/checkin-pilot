@@ -3,6 +3,7 @@ import { runAdapterCheckin } from '../src/adapters';
 import {
   LegacySessionTransport,
   ModernRefreshTransport,
+  ModernSilentTransport,
   openPageSession,
   probeSite,
   type AuthTransport,
@@ -26,7 +27,6 @@ import {
   validateIdentitySource,
   validateOrigin,
   validateSettingsPatch,
-  validateTabId,
   validateUserId,
 } from '../src/background/validation';
 import {
@@ -157,16 +157,65 @@ export default defineBackground(() => {
     }
   }
 
-  /** Builds the auth transport for a site's auth mode. */
+  /** PoW ledger wiring shared by both service-worker-side auth transports. */
+  function buildPowHooks(origin: string, attemptDay: string) {
+    return {
+      getPowAttemptBudget: async () => {
+        const budget = readPowBudget(await repo.read(), origin, attemptDay);
+        return {
+          allowed: budget.canStart,
+          maxMs: Math.min(POW_MAX_WORKER_MS_PER_CHALLENGE, budget.workerMsRemaining),
+        };
+      },
+      onPowChallengeAcquired: async () => {
+        const { value } = await repo.update((draft) => {
+          const reserved = reservePowChallenge(draft, origin, attemptDay);
+          if (!reserved) return false;
+          replaceState(draft, reserved);
+          return true;
+        });
+        if (!value) throw new Error('pow_budget_exhausted');
+      },
+      onPowWorkerUsed: async (elapsedMs: number) => {
+        await repo.update((draft) => {
+          replaceState(draft, recordPowUsage(draft, origin, attemptDay, elapsedMs));
+        });
+      },
+    };
+  }
+
+  /**
+   * Builds the auth transport for a site's auth mode. Same-origin-refresh
+   * sites run silently in the service worker; only an unauthenticated
+   * refresh falls back to a temporary page session.
+   */
   async function createTransport(
     site: SiteConfig,
     attemptDay: string,
+    onPageFallbackOpened: (tabId: number) => void,
   ): Promise<{ transport: AuthTransport; pageTabId?: number } | undefined> {
+    const powHooks = buildPowHooks(site.origin, attemptDay);
     if (site.authMode === 'same-origin-refresh') {
-      const session = await openPageSession(site.origin);
-      pageSessionTabs.set(session.tabId, site.origin);
-      pagePowTaskIds.set(session.tabId, new Set());
-      return { transport: new ModernRefreshTransport(session), pageTabId: session.tabId };
+      return {
+        transport: new ModernSilentTransport({
+          origin: site.origin,
+          userId: site.binding.userId,
+          solvePow: solvePowOffscreen,
+          powMaxMs: POW_MAX_WORKER_MS_PER_CHALLENGE,
+          ...powHooks,
+          openPageFallback: async () => {
+            try {
+              const session = await openPageSession(site.origin);
+              pageSessionTabs.set(session.tabId, site.origin);
+              pagePowTaskIds.set(session.tabId, new Set());
+              onPageFallbackOpened(session.tabId);
+              return new ModernRefreshTransport(session);
+            } catch {
+              return undefined;
+            }
+          },
+        }),
+      };
     }
     if (site.authMode === 'legacy-session') {
       return {
@@ -175,27 +224,7 @@ export default defineBackground(() => {
           userId: site.binding.userId,
           solvePow: solvePowOffscreen,
           powMaxMs: POW_MAX_WORKER_MS_PER_CHALLENGE,
-          getPowAttemptBudget: async () => {
-            const budget = readPowBudget(await repo.read(), site.origin, attemptDay);
-            return {
-              allowed: budget.canStart,
-              maxMs: Math.min(POW_MAX_WORKER_MS_PER_CHALLENGE, budget.workerMsRemaining),
-            };
-          },
-          onPowChallengeAcquired: async () => {
-            const { value } = await repo.update((draft) => {
-              const reserved = reservePowChallenge(draft, site.origin, attemptDay);
-              if (!reserved) return false;
-              replaceState(draft, reserved);
-              return true;
-            });
-            if (!value) throw new Error('pow_budget_exhausted');
-          },
-          onPowWorkerUsed: async (elapsedMs) => {
-            await repo.update((draft) => {
-              replaceState(draft, recordPowUsage(draft, site.origin, attemptDay, elapsedMs));
-            });
-          },
+          ...powHooks,
         }),
       };
     }
@@ -234,7 +263,9 @@ export default defineBackground(() => {
           retryable: false,
         };
       } else {
-        const created = await createTransport(site, attemptDay);
+        const created = await createTransport(site, attemptDay, (tabId) => {
+          pageTabId = tabId;
+        });
         transport = created?.transport;
         pageTabId = created?.pageTabId;
         if (transport === undefined) {
@@ -649,15 +680,11 @@ export default defineBackground(() => {
         if (request.identitySource !== undefined && !validateIdentitySource(request.identitySource)) {
           return { ok: false, errorCode: 'invalid_request' };
         }
-        if (request.tabId !== undefined && !validateTabId(request.tabId)) {
-          return { ok: false, errorCode: 'invalid_request' };
-        }
         const report = await probeSite({
           origin: request.origin,
           ...(request.userId !== undefined ? { userId: request.userId } : {}),
           ...(request.identitySource !== undefined ? { identitySource: request.identitySource } : {}),
           month: localMonthQuery(),
-          ...(request.tabId !== undefined ? { tabId: request.tabId } : {}),
         });
         return { ok: true, type: 'probe', report };
       }
@@ -930,7 +957,6 @@ export default defineBackground(() => {
         ? { userId: identity.userId, identitySource: identity.identitySource }
         : {}),
       month: localMonthQuery(),
-      tabId,
     });
     if (
       !report.supported ||

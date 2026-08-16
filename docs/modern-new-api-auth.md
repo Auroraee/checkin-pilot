@@ -88,3 +88,12 @@
 - 测试：`tests/mock-e2e`（旧/新鉴权、PoW 成功/超时/预算耗尽、账号变化、refresh 失效、Turnstile、未知挑战、标签复用与清理、导航竞态、v1→v2 迁移与一次性通知、Sentinel Token 不出现在消息/存储/日志/通知/快照），以及受影响的单元测试更新。
 - 验收命令：`pnpm typecheck`、`pnpm test`（unit + mock-e2e）、`pnpm build`、`pnpm check:secrets`，全部通过；不生成发布 ZIP。
 - 真实站点验证仍按上文“交付标准”由用户在未签到日触发一次真实 runanytime 签到完成（PoW、服务端结果与临时标签清理）。
+
+## 更新（2026-08-16）：服务工作线程静默优先
+
+产品需求变更：除访问模式外，签到与探测尽量不打开目标站点标签页。
+
+- `same-origin-refresh` 新增静默优先路径（`ModernSilentTransport`）：refresh、状态、挑战、提交全部由扩展 service worker 凭借已授予的 host 权限发起，Cookie 照常附带；Bearer 值仅存于 transport 局部变量，仍不进入扩展消息、存储、日志或通知。
+- 静默 refresh 返回未认证（401/403/重定向/HTML）时，回退到本文描述的同源页面会话流程：这覆盖生产环境校验 refresh Origin 的部署（如 runanytime 的实测行为），回退时才创建 `active:false` 临时标签、用后即关，确认未登录时的结果与通知策略不变。
+- 探测同样静默化：不再复用或创建标签页即可判定现代鉴权能力与当前账号；仅旧式回退仍需页面身份读取。
+- 访问模式（`visit-open`）不受影响，仍按计划打开站点标签页约 15 秒。

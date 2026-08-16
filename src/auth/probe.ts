@@ -3,16 +3,12 @@ import {
   capabilitiesFromStatus,
   fetchPublicStatus,
   probeLegacySite,
+  getCheckinStatus,
   RUNANYTIME_ORIGIN,
 } from '../adapters';
 import type { AdapterProbeResult, FetchLike } from '../adapters/types';
 import { currentLocalMonth } from '../adapters/new-api';
-import { openPageSession } from './page-session';
-import {
-  modernAuthScript,
-  normalizeProbeScriptResult,
-  type ModernScriptPlan,
-} from './refresh-script';
+import { fetchModernRefresh } from './modern-refresh';
 import type { ModernProbeFn, ModernProbeResult } from './types';
 
 export interface ProbeSiteContext {
@@ -20,16 +16,15 @@ export interface ProbeSiteContext {
   userId?: number;
   identitySource?: IdentitySource;
   month: string;
-  tabId?: number;
   fetch?: FetchLike;
   signal?: AbortSignal;
 }
 
 /**
- * Modern-first probing: refresh inside a same-origin tab (reusing the user's
- * tab when possible, otherwise a temporary background tab that is always
- * closed). Only an explicit 404/405 from refresh falls back to legacy
- * session probing; 401 means the user must sign in, never "incompatible".
+ * Modern-first probing. The refresh probe runs silently in the service
+ * worker through the granted host permission; only an explicit 404/405 from
+ * refresh falls back to legacy session probing; 401 means the user must sign
+ * in, never "incompatible".
  */
 export async function probeSite(
   context: ProbeSiteContext,
@@ -55,7 +50,7 @@ export async function probeSite(
     return { ...base, supported: false, reason: 'unknown_challenge' };
   }
 
-  const modern = await modernProbe(context.origin, context.tabId, context.month);
+  const modern = await modernProbe(context.origin, context.month);
   if (modern.kind === 'modern') {
     const isRunanytime = context.origin === RUNANYTIME_ORIGIN;
     const report: AdapterProbeResult = {
@@ -95,42 +90,27 @@ export async function probeSite(
   });
 }
 
-/** Runs the refresh probe in an ISOLATED-world page session. */
+/** Runs the silent refresh probe in the service worker. */
 export async function probeModernAuth(
   origin: string,
-  preferredTabId?: number,
   month: string = currentLocalMonth(),
 ): Promise<ModernProbeResult> {
-  const session = await openPageSession(
+  const refreshed = await fetchModernRefresh({ origin });
+  if (refreshed.kind === 'needs_login') return { kind: 'needs_login' };
+  if (refreshed.kind === 'legacy_only') return { kind: 'legacy_only' };
+  if (refreshed.kind === 'failed') return { kind: 'failure', outcome: refreshed.outcome };
+
+  const status = await getCheckinStatus({
     origin,
-    preferredTabId !== undefined ? { preferredTabId } : {},
-  );
-  try {
-    const scriptPlan: ModernScriptPlan = {
-      op: 'probe',
-      month,
-      userId: 0,
-      powEnabled: false,
-      powMode: 'unknown',
-      turnstileCheck: false,
-      maxPowAttempts: 0,
-      powMaxMs: 0,
-      tabId: session.tabId,
-    };
-    const raw = await session.run<Record<string, unknown>>(
-      modernAuthScript as (...args: never[]) => unknown,
-      [scriptPlan],
-    );
-    return normalizeProbeScriptResult(raw);
-  } catch {
-    return {
-      kind: 'failure',
-      outcome: { code: 'failed', errorCode: 'unknown', retryable: false },
-    };
-  } finally {
-    // A temporary tab is always closed; user tabs are never touched.
-    await session.close();
-  }
+    userId: refreshed.account,
+    authorization: refreshed.authorization,
+    month,
+  });
+  const result: ModernProbeResult = { kind: 'modern', userId: refreshed.account };
+  if (status.ok) result.checkedInToday = status.value.checkedInToday;
+  // A protected status failure never collapses a working refresh into
+  // "incompatible": the site is modern-capable, just possibly needs login.
+  return result;
 }
 
 function reportFailure(

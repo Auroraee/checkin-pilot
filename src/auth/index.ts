@@ -1,5 +1,7 @@
 export * from './flow';
 export * from './legacy-transport';
+export * from './modern-refresh';
+export * from './modern-silent-transport';
 export * from './modern-transport';
 export * from './page-session';
 export * from './probe';

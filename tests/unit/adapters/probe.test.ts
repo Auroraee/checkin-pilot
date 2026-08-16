@@ -33,7 +33,7 @@ describe('site probing (modern-first)', () => {
       authMode: 'same-origin-refresh',
       checkedInToday: false,
     });
-    expect(modernProbe).toHaveBeenCalledWith('https://panel.example', undefined, '2026-08');
+    expect(modernProbe).toHaveBeenCalledWith('https://panel.example', '2026-08');
   });
 
   it('never collapses a refresh 401 into "incompatible"', async () => {

@@ -29,6 +29,8 @@ export interface NewApiRequestContext {
   origin: string;
   userId: number;
   month?: string;
+  /** Full Authorization header value (bearer) for refresh-authenticated calls. */
+  authorization?: string;
   fetch?: FetchLike;
   signal?: AbortSignal;
 }
@@ -102,7 +104,7 @@ export async function getCheckinStatus(
   try {
     const response = await request.fetch(
       url,
-      requestInit('GET', context.signal, true, request.userId),
+      requestInit('GET', context.signal, true, request.userId, request.authorization),
     );
     const httpFailure = outcomeFromHttpStatus(response);
     if (httpFailure !== undefined) return { ok: false, outcome: httpFailure };
@@ -156,7 +158,7 @@ export async function postCheckin(
   try {
     const response = await request.fetch(
       url,
-      requestInit('POST', context.signal, true, request.userId),
+      requestInit('POST', context.signal, true, request.userId, request.authorization),
     );
     const httpFailure = outcomeFromHttpStatus(response);
     if (httpFailure !== undefined) return httpFailure;
@@ -240,7 +242,7 @@ function getPublicRequestParts(
 function getRequestParts(
   context: NewApiRequestContext,
 ):
-  | { ok: true; origin: string; userId: number; fetch: FetchLike }
+  | { ok: true; origin: string; userId: number; authorization?: string; fetch: FetchLike }
   | { ok: false; outcome: NormalizedOutcome } {
   if (!Number.isSafeInteger(context.userId) || context.userId <= 0) {
     return { ok: false, outcome: actionRequiredOutcome('rebind_required', 'auth_failed') };
@@ -254,6 +256,7 @@ function getRequestParts(
       ok: true,
       origin: parsed.origin,
       userId: context.userId,
+      ...(context.authorization !== undefined ? { authorization: context.authorization } : {}),
       fetch: context.fetch ?? globalThis.fetch.bind(globalThis),
     };
   } catch {
@@ -266,10 +269,14 @@ function requestInit(
   signal: AbortSignal | undefined,
   authenticated: boolean,
   userId?: number,
+  authorization?: string,
 ): RequestInit {
   const headers = new Headers({ Accept: 'application/json' });
   if (authenticated && userId !== undefined) {
     headers.set('New-Api-User', String(userId));
+  }
+  if (authenticated && authorization !== undefined) {
+    headers.set('Authorization', authorization);
   }
   const init: RequestInit = {
     method,

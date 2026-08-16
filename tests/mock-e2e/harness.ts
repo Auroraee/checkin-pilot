@@ -41,7 +41,7 @@ export type PowSolverBehavior = 'solve' | 'timeout' | 'error';
 
 export interface MockServerConfig {
   status?: Record<string, unknown> | 'fail' | 'html';
-  refresh?: 'ok' | 'needs_login' | 'legacy_only' | 'network' | 'invalid' | 'get_only';
+  refresh?: 'ok' | 'needs_login' | 'legacy_only' | 'network' | 'invalid' | 'get_only' | 'sw_needs_login';
   refreshAccount?: number;
   checkin?: 'unchecked' | 'checked' | 'needs_login' | 'already_message' | 'invalid';
   challenge?: 'ok' | 'needs_login' | 'invalid' | 'out_of_range';
@@ -130,6 +130,21 @@ class MockSiteServer {
       switch (cfg.refresh) {
         case 'needs_login':
           return Promise.resolve(new Response('', { status: 401 }));
+        case 'sw_needs_login':
+          // Origin-checked deployments: only page-world refreshes are accepted.
+          if (this.currentCaller === 'sw') {
+            return Promise.resolve(new Response('', { status: 401 }));
+          }
+          return Promise.resolve(
+            jsonResponse({
+              success: true,
+              data: {
+                access_token: SENTINEL_TOKEN,
+                token_type: 'Bearer',
+                user: { id: cfg.refreshAccount ?? 7 },
+              },
+            }),
+          );
         case 'legacy_only':
           return Promise.resolve(new Response('', { status: 404 }));
         case 'network':

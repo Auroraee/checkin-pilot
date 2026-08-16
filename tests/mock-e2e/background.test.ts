@@ -159,32 +159,31 @@ describe('legacy-session sites', () => {
 });
 
 describe('same-origin-refresh (modern bearer) sites', () => {
-  it('checks in inside a temporary background tab and closes it afterwards', async () => {
+  it('checks in silently from the service worker without any site tab', async () => {
     await startWith(
-      [site({ authMode: 'same-origin-refresh', adapterId: 'new-api', binding: { ...site().binding, identitySource: 'refresh' } })],
+      [site({ authMode: 'same-origin-refresh', binding: { ...site().binding, identitySource: 'refresh' } })],
       { status: { success: true, data: { checkin_enabled: true, turnstile_check: false, pow_enabled: false, pow_mode: 'unknown' } } },
     );
     const response = await harness.manualCheckin(PANEL);
     successResponse(response);
     expect((response as { outcome: { code: string } }).outcome.code).toBe('success');
-    // A temporary tab was created inactive and then removed.
-    expect(harness.browser.createdTabs).toEqual([{ url: PANEL, active: false }]);
-    expect(harness.browser.removedTabs).toHaveLength(1);
+    // No tab is opened or closed: the whole flow stays in the service worker.
+    expect(harness.browser.createdTabs).toEqual([]);
+    expect(harness.browser.removedTabs).toEqual([]);
     expect(harness.browser.tabsById.size).toBe(0);
-    // The refresh happened in the page world with the sentinel bearer token.
     const refresh = harness.server.requests.find((request) => request.url === '/api/user/auth/refresh');
-    expect(refresh?.from).toBe('page');
+    expect(refresh?.from).toBe('sw');
     expect(refresh?.method).toBe('POST');
     const submit = harness.server.requests.find(
       (request) => request.method === 'POST' && request.url.startsWith('/api/user/checkin'),
     );
-    expect(submit?.from).toBe('page');
+    expect(submit?.from).toBe('sw');
     expect(headerValue(submit ?? { headers: {} }, 'Authorization')).toBe(`Bearer ${SENTINEL_TOKEN}`);
     expect((response as { outcome: { reward?: string } }).outcome.reward).toBe('3 credits');
     harness.assertSentinelConfined();
   });
 
-  it('reuses an existing user tab and never closes it', async () => {
+  it('never touches an existing user tab during a silent check-in', async () => {
     await startWith(
       [site({ authMode: 'same-origin-refresh', binding: { ...site().binding, identitySource: 'refresh' } })],
       { status: { success: true, data: { checkin_enabled: true, turnstile_check: false, pow_enabled: false, pow_mode: 'unknown' } } },
@@ -193,7 +192,6 @@ describe('same-origin-refresh (modern bearer) sites', () => {
     const response = await harness.manualCheckin(PANEL);
     successResponse(response);
     expect((response as { outcome: { code: string } }).outcome.code).toBe('success');
-    // No new tab was created and the user's tab survives.
     expect(harness.browser.createdTabs).toEqual([]);
     expect(harness.browser.removedTabs).toEqual([]);
     expect(harness.browser.tabsById.get(userTab.id)?.url).toBe(`${PANEL}/console/personal`);
@@ -229,6 +227,9 @@ describe('same-origin-refresh (modern bearer) sites', () => {
     expect((first as { outcome: { actionReason: string } }).outcome.actionReason).toBe('sign_in');
     const notificationsAfterFirst = harness.browser.notifications.length;
     expect(notificationsAfterFirst).toBeGreaterThan(0);
+    // The page-session fallback confirmed the 401 and cleaned up its tab.
+    expect(harness.browser.createdTabs).toHaveLength(1);
+    expect(harness.browser.tabsById.size).toBe(0);
 
     const second = await harness.manualCheckin(PANEL);
     expect((second as { outcome: { actionReason: string } }).outcome.actionReason).toBe('sign_in');
@@ -278,6 +279,28 @@ describe('same-origin-refresh (modern bearer) sites', () => {
     expect(refreshCalls.map((request) => request.method)).toEqual(['POST', 'GET']);
     harness.assertSentinelConfined();
   });
+
+  it('falls back to a page session when only extension-origin refresh is rejected', async () => {
+    await startWith(
+      [site({ authMode: 'same-origin-refresh', binding: { ...site().binding, identitySource: 'refresh' } })],
+      {
+        refresh: 'sw_needs_login',
+        status: { success: true, data: { checkin_enabled: true, turnstile_check: false, pow_enabled: false, pow_mode: 'unknown' } },
+      },
+    );
+    const response = await harness.manualCheckin(PANEL);
+    successResponse(response);
+    expect((response as { outcome: { code: string } }).outcome.code).toBe('success');
+    // The silent refresh was rejected, so one temporary tab ran the flow.
+    expect(harness.browser.createdTabs).toEqual([{ url: PANEL, active: false }]);
+    expect(harness.browser.tabsById.size).toBe(0);
+    const submit = harness.server.requests.find(
+      (request) => request.method === 'POST' && request.url.startsWith('/api/user/checkin'),
+    );
+    expect(submit?.from).toBe('page');
+    expect(headerValue(submit ?? { headers: {} }, 'Authorization')).toBe(`Bearer ${SENTINEL_TOKEN}`);
+    harness.assertSentinelConfined();
+  });
 });
 
 describe('runanytime private PoW', () => {
@@ -292,18 +315,19 @@ describe('runanytime private PoW', () => {
       binding: { ...site().binding, identitySource: 'refresh' },
     });
 
-  it('solves the challenge through the offscreen solver in one injection', async () => {
+  it('solves the challenge through the offscreen solver without any tab', async () => {
     await startWith([runanytimeSite()]);
     const response = await harness.manualCheckin(RUNANYTIME);
     successResponse(response);
     expect((response as { outcome: { reward?: string } }).outcome.reward).toBe('3 credits');
-    // Only prefix/difficulty/challengeId cross to the solver; the nonce comes back.
+    expect(harness.browser.createdTabs).toEqual([]);
+    // Only prefix/difficulty cross to the solver; the nonce comes back.
     const solveMessage = harness.browser.messageLog.find(
       (entry) =>
         (entry.message as { type?: string }).type === 'pow:solve' &&
-        (entry.message as { target?: string }).target === 'background',
+        (entry.message as { target?: string }).target === 'offscreen',
     );
-    expect(solveMessage?.from).toBe('page');
+    expect(solveMessage?.from).toBe('sw');
     const payload = solveMessage?.message as {
       prefix: string;
       difficulty: number;
@@ -806,10 +830,10 @@ describe('probing and enrollment', () => {
 });
 
 describe('navigation races', () => {
-  it('fails cleanly and still cleans up the temporary tab', async () => {
+  it('fails cleanly when the page fallback cannot inject and still cleans up its tab', async () => {
     await startWith(
       [site({ authMode: 'same-origin-refresh', binding: { ...site().binding, identitySource: 'refresh' } })],
-      { status: { success: true, data: { checkin_enabled: true, turnstile_check: false, pow_enabled: false, pow_mode: 'unknown' } } },
+      { refresh: 'needs_login' },
     );
     harness.browser.tabGone = true;
     const response = await harness.manualCheckin(PANEL);
@@ -818,7 +842,7 @@ describe('navigation races', () => {
       errorCode: 'unknown',
       retryable: false,
     });
-    // The owned temporary tab is still removed in the cleanup path.
+    // The fallback's temporary tab is still removed in the cleanup path.
     expect(harness.browser.createdTabs).toHaveLength(1);
     expect(harness.browser.tabsById.size).toBe(0);
     harness.assertSentinelConfined();

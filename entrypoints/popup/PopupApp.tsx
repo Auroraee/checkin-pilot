@@ -177,7 +177,6 @@ export function PopupApp() {
         type: 'site:probe',
         origin: tab.origin,
         ...(page ? { userId: page.userId, identitySource: page.identitySource } : {}),
-        tabId: tab.tabId,
       });
       if (!response.ok) throw new Error(response.errorCode);
       if (response.type !== 'probe') throw new Error('invalid_probe_response');

@@ -116,6 +116,9 @@ export async function fetchLegacyPowChallenge(
     Accept: 'application/json',
     'New-Api-User': String(context.userId),
   });
+  if (context.authorization !== undefined) {
+    headers.set('Authorization', context.authorization);
+  }
   const init: RequestInit = {
     method: 'GET',
     credentials: 'include',

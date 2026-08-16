@@ -67,6 +67,5 @@ export type ModernProbeResult =
 
 export type ModernProbeFn = (
   origin: string,
-  preferredTabId?: number,
   month?: string,
 ) => Promise<ModernProbeResult>;
