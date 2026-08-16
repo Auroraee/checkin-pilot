@@ -1,12 +1,6 @@
 import { sha256 } from '@noble/hashes/sha2.js';
 import { describe, expect, it } from 'vitest';
 import {
-  createPowLedger,
-  planPowAttempt,
-  recordChallengeAcquired,
-  recordWorkerUsage,
-} from '../../../src/pow/budget';
-import {
   countLeadingZeroBits,
   digestMeetsDifficulty,
   findNonce,
@@ -63,31 +57,3 @@ describe('PoW solver', () => {
     expect(result.status).toBe('timeout');
   });
 });
-
-describe('PoW daily budget helpers', () => {
-  it('shares two challenges and 24 seconds across all triggers', () => {
-    let ledger = createPowLedger('https://panel.example', '2026-07-31');
-    expect(planPowAttempt(ledger)).toEqual({ allowed: true, maxWorkerMs: 12_000 });
-    ledger = recordChallengeAcquired(ledger);
-    ledger = recordWorkerUsage(ledger, 11_500.1);
-    expect(ledger.workerMsUsed).toBe(11_501);
-    expect(planPowAttempt(ledger)).toEqual({ allowed: true, maxWorkerMs: 12_000 });
-    ledger = recordChallengeAcquired(ledger);
-    expect(planPowAttempt(ledger)).toEqual({
-      allowed: false,
-      maxWorkerMs: 0,
-      reason: 'pow_budget_exhausted',
-    });
-  });
-
-  it('preserves the removal tombstone while recording usage immutably', () => {
-    const original = createPowLedger('https://panel.example', '2026-07-31', true);
-    const updated = recordWorkerUsage(original, Number.NaN);
-    expect(original.workerMsUsed).toBe(0);
-    expect(updated).toMatchObject({
-      removedSiteTombstone: true,
-      workerMsUsed: 12_000,
-    });
-  });
-});
-

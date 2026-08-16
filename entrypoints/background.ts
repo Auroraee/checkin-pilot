@@ -907,9 +907,6 @@ export default defineBackground(() => {
         }
         return snapshotResponse('mutation');
       }
-
-      case 'pow:solve-result':
-        return { ok: true, type: 'pow-ack' };
     }
   }
 

@@ -7,34 +7,6 @@ import type {
 } from '../shared/domain';
 import { markPowTombstone } from './pow-ledger';
 
-export interface RebindSiteInput {
-  userId: number;
-  identitySource: IdentitySource;
-  generation: string;
-  now?: Date;
-}
-
-export function rebindSite(site: SiteConfig, input: RebindSiteInput): SiteConfig {
-  if (!Number.isInteger(input.userId) || input.userId <= 0) {
-    throw new RangeError('A binding user ID must be a positive integer.');
-  }
-  if (!input.generation.trim() || input.generation === site.binding.generation) {
-    throw new Error('A rebind requires a new non-empty binding generation.');
-  }
-  const now = (input.now ?? new Date()).toISOString();
-  return {
-    ...site,
-    updatedAt: now,
-    binding: {
-      userId: input.userId,
-      identitySource: input.identitySource,
-      generation: input.generation,
-      boundAt: now,
-      state: 'active',
-    },
-  };
-}
-
 export function latestRecordForCurrentBinding(
   site: SiteConfig,
   records: readonly CheckinRecord[],

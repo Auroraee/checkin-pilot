@@ -49,8 +49,7 @@ export type AppRequest =
   | { type: 'site:manual-checkin'; origin: string }
   | { type: 'batch:run-all' }
   | { type: 'settings:update'; patch: Partial<GlobalSettings> }
-  | { type: 'permission:revoke'; origin: string }
-  | { type: 'pow:solve-result'; taskId: string; result: PowWorkerResult };
+  | { type: 'permission:revoke'; origin: string };
 
 export interface PowWorkerResult {
   status: 'solved' | 'timeout' | 'cancelled' | 'error';
@@ -64,7 +63,6 @@ export type AppResponse =
   | { ok: true; type: 'mutation'; snapshot: AppSnapshot }
   | { ok: true; type: 'checkin'; outcome: NormalizedOutcome; snapshot: AppSnapshot }
   | { ok: true; type: 'batch'; snapshot: AppSnapshot }
-  | { ok: true; type: 'pow-ack' }
   | { ok: false; errorCode: string };
 
 export interface PowSolveRequest {

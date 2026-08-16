@@ -87,10 +87,6 @@ export async function readTabIdentity(page: ActiveTabPage): Promise<EnrollmentPa
   };
 }
 
-export async function inspectCurrentPage(): Promise<EnrollmentPage> {
-  return readTabIdentity(await inspectActiveTab());
-}
-
 export async function revokeOrigin(origin: string): Promise<boolean> {
   const originPattern = exactOriginPattern(origin);
   if (!originPattern) return false;

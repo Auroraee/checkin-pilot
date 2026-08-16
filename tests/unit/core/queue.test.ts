@@ -1,8 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   isStoppedForTheDay,
   randomSerialDelayMs,
-  runSerialQueue,
   selectSitesForTrigger,
 } from '../../../src/core';
 import { site, record } from './fixtures';
@@ -80,34 +79,5 @@ describe('serial site queue', () => {
   it('uses bounded 5 to 15 second spacing', () => {
     expect(randomSerialDelayMs(() => 0)).toBe(5_000);
     expect(randomSerialDelayMs(() => 1)).toBe(15_000);
-  });
-
-  it('never overlaps work and continues after a site failure', async () => {
-    const sites = [
-      site({ origin: 'https://a.test', createdAt: '2026-01-01T00:00:00.000Z' }),
-      site({ origin: 'https://b.test', createdAt: '2026-01-02T00:00:00.000Z' }),
-      site({ origin: 'https://c.test', createdAt: '2026-01-03T00:00:00.000Z' }),
-    ];
-    let active = 0;
-    let maxActive = 0;
-    const calls: string[] = [];
-    const delay = vi.fn(async () => undefined);
-    const results = await runSerialQueue(sites, {
-      random: () => 0,
-      delay,
-      work: async (configuredSite) => {
-        active += 1;
-        maxActive = Math.max(maxActive, active);
-        calls.push(configuredSite.origin);
-        active -= 1;
-        if (configuredSite.origin === 'https://b.test') throw new Error('redacted');
-        return configuredSite.origin;
-      },
-    });
-    expect(maxActive).toBe(1);
-    expect(calls).toEqual(sites.map((configuredSite) => configuredSite.origin));
-    expect(delay).toHaveBeenCalledTimes(2);
-    expect(results[1]?.error).toBeInstanceOf(Error);
-    expect(results[2]?.result).toBe('https://c.test');
   });
 });

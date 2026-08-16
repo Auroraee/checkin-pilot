@@ -1,13 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildSiteViews,
-  canStartPowChallenge,
   clearExpiredPowLedgers,
   hasSuccessfulCheckinToday,
   powLedgerKey,
   pruneHistory,
   readPowBudget,
-  rebindSite,
   recordPowUsage,
   removeSite,
   reservePowChallenge,
@@ -31,14 +29,17 @@ describe('history and binding generations', () => {
     expect(pruned[0]?.id).toBe('record-0');
   });
 
-  it('rebinds to a new generation while excluding old records from current summary', () => {
+  it('excludes old-binding records from the current summary after a rebind', () => {
     const original = site();
-    const rebound = rebindSite(original, {
-      userId: 8,
-      identitySource: 'user.id',
-      generation: 'generation-b',
-      now: new Date('2026-07-31T00:00:00.000Z'),
-    });
+    const rebound = {
+      ...original,
+      binding: {
+        ...original.binding,
+        userId: 8,
+        identitySource: 'user.id' as const,
+        generation: 'generation-b',
+      },
+    };
     const state = stateWithSite({
       sites: { [rebound.origin]: rebound },
       records: [
@@ -81,7 +82,7 @@ describe('shared per-origin PoW ledger', () => {
     const base = stateWithSite();
     const once = reservePowChallenge(base, 'https://example.test', '2026-07-31')!;
     const twice = reservePowChallenge(once, 'https://example.test', '2026-07-31')!;
-    expect(canStartPowChallenge(twice, 'https://example.test', '2026-07-31')).toBe(false);
+    expect(readPowBudget(twice, 'https://example.test', '2026-07-31').canStart).toBe(false);
     expect(reservePowChallenge(twice, 'https://example.test', '2026-07-31')).toBeUndefined();
   });
 

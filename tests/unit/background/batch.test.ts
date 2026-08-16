@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createPersistentBatch,
-  discardIneligibleBatchOrigins,
   finishBatchOrigin,
   nextEligibleBatchOrigin,
 } from '../../../src/background/batch';
@@ -61,7 +60,6 @@ describe('persistent batches', () => {
       createdAt: '2026-07-31T00:00:00.000Z',
     };
     expect(nextEligibleBatchOrigin(batch, state)).toBeUndefined();
-    expect(discardIneligibleBatchOrigins(batch, state)).toBeUndefined();
   });
 
   it('persists a randomized next-site timestamp until the queue is empty', () => {

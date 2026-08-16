@@ -38,14 +38,6 @@ export function readPowBudget(
   };
 }
 
-export function canStartPowChallenge(
-  state: StorageState,
-  origin: string,
-  scheduleDay: string,
-): boolean {
-  return readPowBudget(state, origin, scheduleDay).canStart;
-}
-
 /** Reserve immediately after challenge acquisition so crashes cannot reset usage. */
 export function reservePowChallenge(
   state: StorageState,

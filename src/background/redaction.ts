@@ -1,13 +1,3 @@
-import type { RedactedErrorCode } from '../shared/domain';
-
-export function redactUnknownError(error: unknown): RedactedErrorCode {
-  if (error instanceof DOMException && error.name === 'AbortError') {
-    return 'unknown';
-  }
-  if (error instanceof TypeError) return 'network';
-  return 'unknown';
-}
-
 export function safeLog(
   level: 'info' | 'warn' | 'error',
   event: string,

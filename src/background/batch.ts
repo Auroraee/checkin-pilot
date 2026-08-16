@@ -51,24 +51,3 @@ export function finishBatchOrigin(
     ...(nextOriginAt ? { nextOriginAt: nextOriginAt.toISOString() } : {}),
   };
 }
-
-export function discardIneligibleBatchOrigins(
-  batch: BatchJob,
-  state: StorageState,
-): BatchJob | undefined {
-  const pendingOrigins = batch.pendingOrigins.filter((origin) => {
-    const site = state.sites[origin];
-    return (
-      site?.enabled === true &&
-      site.binding.generation === batch.bindingGenerations[origin]
-    );
-  });
-  if (pendingOrigins.length === 0) return undefined;
-  return {
-    ...batch,
-    pendingOrigins,
-    bindingGenerations: Object.fromEntries(
-      pendingOrigins.map((origin) => [origin, batch.bindingGenerations[origin] ?? '']),
-    ),
-  };
-}

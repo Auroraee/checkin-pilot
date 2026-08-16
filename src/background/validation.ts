@@ -5,10 +5,6 @@ export function validateUserId(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 }
 
-export function validateTabId(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
-}
-
 export function validateOrigin(value: unknown): value is string {
   return typeof value === 'string' && normalizeHttpsOrigin(value) === value;
 }
