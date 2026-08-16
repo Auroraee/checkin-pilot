@@ -6,6 +6,7 @@ import {
   type DailySchedule,
   type PowLedger,
   type RetryJob,
+  type ScheduleMode,
   type SiteConfig,
   type StorageState,
   type UpgradeState,
@@ -344,9 +345,12 @@ export function normalizeStorageState(value: unknown, now: Date = new Date()): S
   const settingsValue = isObject(value.settings) ? value.settings : {};
   const start = Number(settingsValue.windowStartMinutes);
   const end = Number(settingsValue.windowEndMinutes);
+  const scheduleMode: ScheduleMode =
+    settingsValue.scheduleMode === 'window' ? 'window' : 'startup';
   const settings =
     Number.isInteger(start) && Number.isInteger(end) && start >= 0 && end <= 24 * 60 && start < end
       ? {
+          scheduleMode,
           windowStartMinutes: start,
           windowEndMinutes: end,
           notifyOnSuccess:

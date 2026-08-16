@@ -34,4 +34,16 @@ describe('background input validation', () => {
       }),
     ).toBeUndefined();
   });
+
+  it('accepts only known schedule modes and defaults to the current one', () => {
+    expect(validateSettingsPatch(DEFAULT_SETTINGS, { scheduleMode: 'window' })).toMatchObject({
+      scheduleMode: 'window',
+    });
+    expect(validateSettingsPatch(DEFAULT_SETTINGS, { scheduleMode: 'startup' })).toMatchObject({
+      scheduleMode: 'startup',
+    });
+    expect(
+      validateSettingsPatch(DEFAULT_SETTINGS, { scheduleMode: 'nightly' as never }),
+    ).toBeUndefined();
+  });
 });

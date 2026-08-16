@@ -30,8 +30,18 @@ function normalizedRandom(random: () => number): number {
 export function createDailySchedule(
   scheduleDay: string,
   settings: GlobalSettings,
+  now: Date = new Date(),
   random: () => number = Math.random,
 ): DailySchedule {
+  // Startup mode is due at the first wake that creates it: the batch runs as
+  // soon as the browser opens (or the day rolls over under a running browser).
+  if (settings.scheduleMode === 'startup') {
+    return {
+      scheduleDay,
+      scheduledAt: now.toISOString(),
+      state: 'scheduled',
+    };
+  }
   assertWindow(settings);
   const start = dateAtLocalMinutes(scheduleDay, settings.windowStartMinutes);
   const end = dateAtLocalMinutes(scheduleDay, settings.windowEndMinutes);
@@ -58,7 +68,7 @@ export function ensureDailySchedule(
   const existing = state.schedules[scheduleDay];
   if (existing) return { state, schedule: existing, created: false };
 
-  const schedule = createDailySchedule(scheduleDay, state.settings, random);
+  const schedule = createDailySchedule(scheduleDay, state.settings, now, random);
   return {
     state: {
       ...state,

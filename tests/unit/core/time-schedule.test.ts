@@ -26,16 +26,38 @@ describe('browser-local time', () => {
 });
 
 describe('daily schedule', () => {
+  const windowSettings = {
+    scheduleMode: 'window' as const,
+    windowStartMinutes: 480,
+    windowEndMinutes: 600,
+    notifyOnSuccess: false,
+  };
+
   it('samples once inside the configured global window', () => {
     const schedule = createDailySchedule(
       '2026-07-31',
-      { windowStartMinutes: 480, windowEndMinutes: 600, notifyOnSuccess: false },
+      windowSettings,
+      new Date(2026, 6, 31, 7, 0),
       () => 0.5,
     );
     const sampled = new Date(schedule.scheduledAt);
     expect(sampled.getHours()).toBe(9);
     expect(sampled.getMinutes()).toBe(0);
     expect(schedule.state).toBe('scheduled');
+  });
+
+  it('is due immediately in startup mode', () => {
+    const now = new Date(2026, 6, 31, 7, 42);
+    const schedule = createDailySchedule(
+      '2026-07-31',
+      { ...windowSettings, scheduleMode: 'startup' },
+      now,
+      () => 0.99,
+    );
+    expect(schedule.scheduledAt).toBe(now.toISOString());
+    expect(schedule.state).toBe('scheduled');
+    expect(getDueTrigger(schedule, new Date(now.getTime() + 1), 'startup')).toBe('catchup');
+    expect(getDueTrigger(schedule, now, 'alarm')).toBe('scheduled');
   });
 
   it('keeps one sampled batch for every site on the same day', () => {
@@ -51,7 +73,8 @@ describe('daily schedule', () => {
   it('classifies alarm wakes as scheduled and startup wakes as same-day catch-up', () => {
     const schedule = createDailySchedule(
       '2026-07-31',
-      { windowStartMinutes: 480, windowEndMinutes: 600, notifyOnSuccess: false },
+      windowSettings,
+      new Date(2026, 6, 31, 7, 0),
       () => 0,
     );
     expect(getDueTrigger(schedule, new Date(2026, 6, 31, 8, 1), 'alarm')).toBe('scheduled');
@@ -61,7 +84,8 @@ describe('daily schedule', () => {
   it('never starts or completes a prior-day batch after midnight', () => {
     const schedule = createDailySchedule(
       '2026-07-31',
-      { windowStartMinutes: 480, windowEndMinutes: 600, notifyOnSuccess: false },
+      windowSettings,
+      new Date(2026, 6, 31, 7, 0),
       () => 0,
     );
     const nextDay = new Date(2026, 7, 1, 0, 1);
@@ -80,7 +104,8 @@ describe('daily schedule', () => {
   it('records running and complete timestamps on the schedule day', () => {
     const schedule = createDailySchedule(
       '2026-07-31',
-      { windowStartMinutes: 480, windowEndMinutes: 600, notifyOnSuccess: false },
+      windowSettings,
+      new Date(2026, 6, 31, 7, 0),
       () => 0,
     );
     const running = markScheduleRunning(schedule, new Date(2026, 6, 31, 8, 0));
@@ -94,7 +119,7 @@ describe('daily schedule', () => {
     expect(() =>
       createDailySchedule(
         '2026-07-31',
-        { windowStartMinutes: 600, windowEndMinutes: 480, notifyOnSuccess: false },
+        { ...windowSettings, windowStartMinutes: 600, windowEndMinutes: 480 },
       ),
     ).toThrow(RangeError);
   });

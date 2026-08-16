@@ -37,6 +37,7 @@ import {
 import { isStoppedForTheDay, randomSerialDelayMs, selectSitesForTrigger } from '../src/core/queue';
 import { createRetryJob, isRetryJobDue } from '../src/core/retry';
 import {
+  createDailySchedule,
   ensureDailySchedule,
   getDueTrigger,
   markScheduleComplete,
@@ -108,7 +109,9 @@ export default defineBackground(() => {
     };
     if (schedule) {
       snapshot.currentSchedule = schedule;
-      if (schedule.state === 'scheduled') snapshot.nextBatchAt = schedule.scheduledAt;
+      if (schedule.state === 'scheduled' && state.settings.scheduleMode === 'window') {
+        snapshot.nextBatchAt = schedule.scheduledAt;
+      }
     }
     return snapshot;
   }
@@ -850,7 +853,16 @@ export default defineBackground(() => {
         const { value } = await repo.update((draft) => {
           const next = validateSettingsPatch(draft.settings, request.patch);
           if (!next) return false;
+          const modeChanged = next.scheduleMode !== draft.settings.scheduleMode;
           draft.settings = next;
+          if (modeChanged) {
+            // Resample an unstarted schedule so the new mode applies today.
+            const scheduleDay = localScheduleDay();
+            const schedule = draft.schedules[scheduleDay];
+            if (schedule && schedule.state === 'scheduled') {
+              draft.schedules[scheduleDay] = createDailySchedule(scheduleDay, next);
+            }
+          }
           return true;
         });
         if (!value) return { ok: false, errorCode: 'invalid_settings' };

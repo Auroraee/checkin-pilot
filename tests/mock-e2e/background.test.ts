@@ -95,6 +95,14 @@ const successResponse = (response: unknown) => {
   expect((response as { ok: boolean }).ok).toBe(true);
 };
 
+async function waitFor(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error('timed out waiting for condition');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 function headerValue(request: { headers: Record<string, string> }, name: string): string | undefined {
   const lower = name.toLowerCase();
   const entry = Object.entries(request.headers).find(([key]) => key.toLowerCase() === lower);
@@ -434,14 +442,6 @@ describe('retry notifications', () => {
     listener({ name: `checkin-pilot:retry:${jobId}` });
   }
 
-  async function waitFor(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
-    const deadline = Date.now() + timeoutMs;
-    while (!condition()) {
-      if (Date.now() > deadline) throw new Error('timed out waiting for condition');
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-  }
-
   it('notifies when the final bounded retry fails', async () => {
     const job = retryJob({ retryCount: 2 });
     await startWithRetry(job);
@@ -476,6 +476,24 @@ describe('retry notifications', () => {
     expect(stored.retries).toHaveLength(1);
     expect(stored.retries[0]).toMatchObject({ retryCount: 2, originalTrigger: 'scheduled' });
     harness.assertSentinelConfined();
+  });
+});
+
+describe('startup schedule mode', () => {
+  it('runs the daily batch as soon as the background wakes with sites present', async () => {
+    harness.reset();
+    harness.server.setConfig({
+      status: { success: true, data: { checkin_enabled: true, turnstile_check: false, pow_enabled: false, pow_mode: 'unknown' } },
+      checkin: 'unchecked',
+    } as never);
+    harness.browser.grant(PANEL);
+    // Seed the site before the first service-worker wake, like a browser launch.
+    await seedState(seededState([site()]));
+    await harness.startBackground();
+    await waitFor(() => (harness.state as StorageState).records.length > 0);
+    const stored = harness.state as StorageState;
+    expect(stored.records[0]).toMatchObject({ outcome: 'success', trigger: 'catchup' });
+    expect(stored.schedules[TODAY]?.state).toBe('complete');
   });
 });
 

@@ -25,7 +25,10 @@ export function validateSettingsPatch(
   current: GlobalSettings,
   patch: Partial<GlobalSettings>,
 ): GlobalSettings | undefined {
+  const scheduleMode =
+    patch.scheduleMode === undefined ? current.scheduleMode : patch.scheduleMode;
   const candidate: GlobalSettings = {
+    scheduleMode,
     windowStartMinutes:
       patch.windowStartMinutes ?? current.windowStartMinutes,
     windowEndMinutes: patch.windowEndMinutes ?? current.windowEndMinutes,
@@ -33,6 +36,7 @@ export function validateSettingsPatch(
   };
 
   if (
+    (scheduleMode !== 'startup' && scheduleMode !== 'window') ||
     !Number.isInteger(candidate.windowStartMinutes) ||
     !Number.isInteger(candidate.windowEndMinutes) ||
     candidate.windowStartMinutes < 0 ||

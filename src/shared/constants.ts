@@ -8,6 +8,7 @@ export const RETRY_ALARM_PREFIX = 'checkin-pilot:retry:';
 export const BATCH_ALARM_NAME = 'checkin-pilot:batch-next';
 
 export const DEFAULT_SETTINGS: GlobalSettings = {
+  scheduleMode: 'startup',
   windowStartMinutes: 8 * 60,
   windowEndMinutes: 10 * 60,
   notifyOnSuccess: false,

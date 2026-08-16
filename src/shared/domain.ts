@@ -93,7 +93,11 @@ export interface SiteConfig {
   binding: SessionBinding;
 }
 
+export type ScheduleMode = 'startup' | 'window';
+
 export interface GlobalSettings {
+  /** 'startup' checks in on the first browser wake of each local day. */
+  scheduleMode: ScheduleMode;
   windowStartMinutes: number;
   windowEndMinutes: number;
   notifyOnSuccess: boolean;

@@ -9,6 +9,7 @@ import {
   ShieldCheck,
 } from '@phosphor-icons/react';
 import { browser } from 'wxt/browser';
+import type { GlobalSettings } from '../../src/shared/domain';
 import {
   AppHeader,
   Button,
@@ -30,6 +31,7 @@ import { useAppSnapshot } from '../../src/ui/useAppSnapshot';
 export function OptionsApp() {
   const { t } = useI18n();
   const { snapshot, loading, errorCode: snapshotError, request } = useAppSnapshot();
+  const [scheduleMode, setScheduleMode] = useState<'startup' | 'window'>('startup');
   const [startTime, setStartTime] = useState('08:00');
   const [endTime, setEndTime] = useState('10:00');
   const [notifyOnSuccess, setNotifyOnSuccess] = useState(false);
@@ -42,13 +44,14 @@ export function OptionsApp() {
   // Unsaved time edits must survive background writes (check-in records,
   // batch state...), which refresh the snapshot and replace settings.
   const [settingsDirty, setSettingsDirty] = useState(false);
-  const syncedSettingsRef = useRef<string>();
+  const syncedSettingsRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     if (!snapshot || settingsDirty) return;
     const serialized = JSON.stringify(snapshot.settings);
     if (syncedSettingsRef.current === serialized) return;
     syncedSettingsRef.current = serialized;
+    setScheduleMode(snapshot.settings.scheduleMode);
     setStartTime(minutesToTimeInput(snapshot.settings.windowStartMinutes));
     setEndTime(minutesToTimeInput(snapshot.settings.windowEndMinutes));
     setNotifyOnSuccess(snapshot.settings.notifyOnSuccess);
@@ -63,24 +66,26 @@ export function OptionsApp() {
 
   const saveSettings = async (event: FormEvent) => {
     event.preventDefault();
-    const windowStartMinutes = timeInputToMinutes(startTime);
-    const windowEndMinutes = timeInputToMinutes(endTime);
-    if (
-      windowStartMinutes === undefined ||
-      windowEndMinutes === undefined ||
-      windowEndMinutes <= windowStartMinutes
-    ) {
-      setValidationError(t('validationWindow'));
-      return;
+    const patch: Partial<GlobalSettings> = { scheduleMode };
+    if (scheduleMode === 'window') {
+      const windowStartMinutes = timeInputToMinutes(startTime);
+      const windowEndMinutes = timeInputToMinutes(endTime);
+      if (
+        windowStartMinutes === undefined ||
+        windowEndMinutes === undefined ||
+        windowEndMinutes <= windowStartMinutes
+      ) {
+        setValidationError(t('validationWindow'));
+        return;
+      }
+      patch.windowStartMinutes = windowStartMinutes;
+      patch.windowEndMinutes = windowEndMinutes;
     }
 
     setValidationError(undefined);
     setNotice(undefined);
     setBusy('settings');
-    const response = await request({
-      type: 'settings:update',
-      patch: { windowStartMinutes, windowEndMinutes },
-    });
+    const response = await request({ type: 'settings:update', patch });
     if (response.ok) {
       setNotice({ tone: 'success', text: t('saved') });
       setSettingsDirty(false);
@@ -177,21 +182,56 @@ export function OptionsApp() {
           <section className="settings-section" aria-labelledby="daily-window-title">
             <SectionHeading
               id="daily-window-title"
-              title={t('currentWindow')}
+              title={t('scheduleSectionTitle')}
               description={t('browserLocalTime')}
               action={<CalendarDots size={23} weight="duotone" aria-hidden="true" />}
             />
             <form className="settings-card" onSubmit={(event) => void saveSettings(event)}>
-              <div className="time-fields">
-                <label>
-                  <span>{t('windowStart')}</span>
-                  <span className="time-input-wrap"><Clock size={17} aria-hidden="true" /><input type="time" value={startTime} onChange={(event) => { setSettingsDirty(true); setStartTime(event.target.value); }} required /></span>
+              <div className="mode-options" role="radiogroup" aria-label={t('scheduleMode')}>
+                <label className={`mode-option${scheduleMode === 'startup' ? ' selected' : ''}`}>
+                  <input
+                    type="radio"
+                    name="schedule-mode"
+                    checked={scheduleMode === 'startup'}
+                    onChange={() => {
+                      setSettingsDirty(true);
+                      setScheduleMode('startup');
+                    }}
+                  />
+                  <span>
+                    <strong>{t('scheduleModeStartup')}</strong>
+                    <small>{t('scheduleModeStartupHint')}</small>
+                  </span>
                 </label>
-                <label>
-                  <span>{t('windowEnd')}</span>
-                  <span className="time-input-wrap"><Clock size={17} aria-hidden="true" /><input type="time" value={endTime} onChange={(event) => { setSettingsDirty(true); setEndTime(event.target.value); }} required /></span>
+                <label className={`mode-option${scheduleMode === 'window' ? ' selected' : ''}`}>
+                  <input
+                    type="radio"
+                    name="schedule-mode"
+                    checked={scheduleMode === 'window'}
+                    onChange={() => {
+                      setSettingsDirty(true);
+                      setScheduleMode('window');
+                    }}
+                  />
+                  <span>
+                    <strong>{t('scheduleModeWindow')}</strong>
+                    <small>{t('scheduleModeWindowHint')}</small>
+                  </span>
                 </label>
               </div>
+
+              {scheduleMode === 'window' ? (
+                <div className="time-fields">
+                  <label>
+                    <span>{t('windowStart')}</span>
+                    <span className="time-input-wrap"><Clock size={17} aria-hidden="true" /><input type="time" value={startTime} onChange={(event) => { setSettingsDirty(true); setStartTime(event.target.value); }} required /></span>
+                  </label>
+                  <label>
+                    <span>{t('windowEnd')}</span>
+                    <span className="time-input-wrap"><Clock size={17} aria-hidden="true" /><input type="time" value={endTime} onChange={(event) => { setSettingsDirty(true); setEndTime(event.target.value); }} required /></span>
+                  </label>
+                </div>
+              ) : null}
 
               <div className="settings-divider" />
 
