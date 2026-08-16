@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   Bell,
   CalendarDots,
@@ -39,13 +39,20 @@ export function OptionsApp() {
   // Keep removal confirmation in the page itself so the flow works both when
   // the options page opens in a tab and when Chrome renders it embedded.
   const [removeCandidate, setRemoveCandidate] = useState<string>();
+  // Unsaved time edits must survive background writes (check-in records,
+  // batch state...), which refresh the snapshot and replace settings.
+  const [settingsDirty, setSettingsDirty] = useState(false);
+  const syncedSettingsRef = useRef<string>();
 
   useEffect(() => {
-    if (!snapshot) return;
+    if (!snapshot || settingsDirty) return;
+    const serialized = JSON.stringify(snapshot.settings);
+    if (syncedSettingsRef.current === serialized) return;
+    syncedSettingsRef.current = serialized;
     setStartTime(minutesToTimeInput(snapshot.settings.windowStartMinutes));
     setEndTime(minutesToTimeInput(snapshot.settings.windowEndMinutes));
     setNotifyOnSuccess(snapshot.settings.notifyOnSuccess);
-  }, [snapshot?.settings]);
+  }, [snapshot?.settings, settingsDirty]);
 
   const records = useMemo(
     () => snapshot ? [...snapshot.records].sort((a, b) => b.attemptedAt.localeCompare(a.attemptedAt)) : [],
@@ -76,6 +83,7 @@ export function OptionsApp() {
     });
     if (response.ok) {
       setNotice({ tone: 'success', text: t('saved') });
+      setSettingsDirty(false);
     } else {
       setNotice({ tone: 'danger', text: t(errorTranslationKey(response.errorCode)) });
     }
@@ -177,11 +185,11 @@ export function OptionsApp() {
               <div className="time-fields">
                 <label>
                   <span>{t('windowStart')}</span>
-                  <span className="time-input-wrap"><Clock size={17} aria-hidden="true" /><input type="time" value={startTime} onChange={(event) => setStartTime(event.target.value)} required /></span>
+                  <span className="time-input-wrap"><Clock size={17} aria-hidden="true" /><input type="time" value={startTime} onChange={(event) => { setSettingsDirty(true); setStartTime(event.target.value); }} required /></span>
                 </label>
                 <label>
                   <span>{t('windowEnd')}</span>
-                  <span className="time-input-wrap"><Clock size={17} aria-hidden="true" /><input type="time" value={endTime} onChange={(event) => setEndTime(event.target.value)} required /></span>
+                  <span className="time-input-wrap"><Clock size={17} aria-hidden="true" /><input type="time" value={endTime} onChange={(event) => { setSettingsDirty(true); setEndTime(event.target.value); }} required /></span>
                 </label>
               </div>
 
