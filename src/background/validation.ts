@@ -48,7 +48,7 @@ export function validateSettingsPatch(
 export function isSafeEnrollmentLabel(label: unknown): label is string {
   return (
     typeof label === 'string' &&
-    label.length > 0 &&
+    label.trim().length > 0 &&
     label.length <= 120 &&
     !/[\u0000-\u001f\u007f]/.test(label)
   );

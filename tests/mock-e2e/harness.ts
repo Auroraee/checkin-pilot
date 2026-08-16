@@ -663,6 +663,10 @@ export class MockHarness {
     return this.browser.sendToBackground({ type: 'site:upgrade', enrollment });
   }
 
+  async rename(origin: string, label: string): Promise<any> {
+    return this.browser.sendToBackground({ type: 'site:rename', origin, label });
+  }
+
   async runAll(): Promise<any> {
     return this.browser.sendToBackground({ type: 'batch:run-all' });
   }

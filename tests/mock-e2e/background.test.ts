@@ -827,6 +827,51 @@ describe('probing and enrollment', () => {
     expect(report.supported).toBe(false);
     expect(report.reason).toBe('sign_in');
   });
+
+  it('renames a visit-mode site without touching its binding', async () => {
+    await startWith([
+      site({
+        adapterId: 'visit-open',
+        authMode: 'none',
+        platform: 'generic',
+        capabilities: { checkin: true, statusEndpoint: false },
+        binding: { ...site().binding, userId: 1 },
+      }),
+    ]);
+    const rename = await harness.rename(PANEL, 'Panel 控制台');
+    successResponse(rename);
+    const stored = harness.state as StorageState;
+    expect(stored.sites[PANEL]?.label).toBe('Panel 控制台');
+    expect(stored.sites[PANEL]?.binding.generation).toBe('generation-a');
+    expect(stored.sites[PANEL]?.enabled).toBe(true);
+  });
+
+  it('rejects a rename for an unknown origin or an unsafe label', async () => {
+    await startWith([site()]);
+    const missing = await harness.rename('https://unknown.example', 'Name');
+    expect((missing as { ok: boolean; errorCode: string }).errorCode).toBe('site_not_found');
+    const empty = await harness.rename(PANEL, '   ');
+    expect((empty as { ok: boolean; errorCode: string }).errorCode).toBe('invalid_request');
+    const tooLong = await harness.rename(PANEL, 'x'.repeat(121));
+    expect((tooLong as { ok: boolean; errorCode: string }).errorCode).toBe('invalid_request');
+    const controlChars = await harness.rename(PANEL, 'bad\u0007name');
+    expect((controlChars as { ok: boolean; errorCode: string }).errorCode).toBe('invalid_request');
+  });
+
+  it('applies the enrollment label when rebinding to a changed account', async () => {
+    await startWith([site()], { refreshAccount: 9 });
+    const rebind = await harness.browser.sendToBackground({
+      type: 'site:rebind',
+      origin: PANEL,
+      userId: 9,
+      identitySource: 'refresh',
+      label: 'Panel 新名称',
+    });
+    successResponse(rebind);
+    const stored = harness.state as StorageState;
+    expect(stored.sites[PANEL]?.label).toBe('Panel 新名称');
+    expect(stored.sites[PANEL]?.binding.userId).toBe(9);
+  });
 });
 
 describe('navigation races', () => {

@@ -25,6 +25,26 @@ export interface ActiveTabPage {
   label: string;
 }
 
+/** Mirrors the 120-character cap in the background's isSafeEnrollmentLabel. */
+const MAX_SITE_LABEL_LENGTH = 120;
+
+/**
+ * Derives the stored site label from the tab title — the same page name the
+ * browser pre-fills when bookmarking — falling back to the hostname when the
+ * title is missing or unusable.
+ */
+export function siteLabelFromTabTitle(
+  title: string | undefined,
+  hostname: string,
+): string {
+  const normalized = title
+    ?.replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_SITE_LABEL_LENGTH);
+  return normalized ? normalized : hostname;
+}
+
 export interface EnrollmentPage {
   origin: string;
   originPattern: string;
@@ -55,7 +75,7 @@ export async function inspectActiveTab(): Promise<ActiveTabPage> {
     tabId: tab.id,
     origin: url.origin,
     originPattern,
-    label: url.hostname,
+    label: siteLabelFromTabTitle(tab.title, url.hostname),
   };
 }
 

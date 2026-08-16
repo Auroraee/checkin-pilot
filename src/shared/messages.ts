@@ -38,12 +38,14 @@ export type AppRequest =
       origin: string;
       userId: number;
       identitySource: IdentitySource;
+      label?: string;
       authMode?: AuthMode;
       adapterId?: AdapterId;
       platform?: PlatformFamily;
       supportLevel?: SupportLevel;
       capabilities?: SiteCapabilities;
     }
+  | { type: 'site:rename'; origin: string; label: string }
   | { type: 'site:set-enabled'; origin: string; enabled: boolean }
   | { type: 'site:remove'; origin: string }
   | { type: 'site:manual-checkin'; origin: string }

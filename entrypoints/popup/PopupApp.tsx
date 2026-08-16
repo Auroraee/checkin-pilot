@@ -183,6 +183,18 @@ export function PopupApp() {
 
       const report = response.report;
       if (!report.supported) {
+        // A visit-mode site never depended on probe support, so its update
+        // only refreshes the display name from the current page title.
+        if (existing?.adapterId === 'visit-open') {
+          const rename = await request({
+            type: 'site:rename',
+            origin: tab.origin,
+            label: tab.label,
+          });
+          if (!rename.ok) throw new Error(rename.errorCode);
+          setMessage({ tone: 'success', text: t('siteUpdated') });
+          return;
+        }
         if (report.reason === 'sign_in') {
           // 401 means "sign in", never "incompatible".
           setMessage({ tone: 'warning', text: t('errorAuth') });
@@ -267,6 +279,7 @@ export function PopupApp() {
           origin: pending.page.origin,
           userId: pending.page.userId,
           identitySource: pending.page.identitySource,
+          label: pending.page.label,
           ...(pending.authMode ? { authMode: pending.authMode } : {}),
           ...(pending.adapterId ? { adapterId: pending.adapterId } : {}),
           ...(pending.platform ? { platform: pending.platform } : {}),

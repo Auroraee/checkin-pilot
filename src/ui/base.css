@@ -420,6 +420,22 @@ a:focus-visible {
   white-space: nowrap;
 }
 
+.site-subline {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* The origin yields space first; the last-result time stays fully visible. */
+.site-subline .site-origin {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.site-subline .site-meta {
+  flex-shrink: 0;
+}
+
 .site-actions {
   display: flex;
   gap: 7px;

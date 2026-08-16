@@ -736,7 +736,9 @@ export default defineBackground(() => {
           const nowIso = new Date().toISOString();
           draft.sites[enrollment.origin] = {
             ...site,
-            label: site.label || enrollment.label,
+            // Refresh the display name from the current page title so sites
+            // enrolled before title-based labels catch up on update.
+            label: enrollment.label,
             platform: enrollment.platform,
             adapterId: enrollment.adapterId,
             authMode: enrollment.authMode,
@@ -795,12 +797,16 @@ export default defineBackground(() => {
         if (request.capabilities !== undefined && !validateCapabilities(request.capabilities)) {
           return { ok: false, errorCode: 'invalid_request' };
         }
+        if (request.label !== undefined && !isSafeEnrollmentLabel(request.label)) {
+          return { ok: false, errorCode: 'invalid_request' };
+        }
         const { value } = await repo.update((draft) => {
           const site = draft.sites[request.origin];
           if (!site) return false;
           const nowIso = new Date().toISOString();
           draft.sites[request.origin] = {
             ...site,
+            ...(request.label !== undefined ? { label: request.label } : {}),
             ...(request.authMode !== undefined ? { authMode: request.authMode } : {}),
             ...(request.adapterId !== undefined ? { adapterId: request.adapterId } : {}),
             ...(request.platform !== undefined ? { platform: request.platform } : {}),
@@ -816,6 +822,21 @@ export default defineBackground(() => {
               state: 'active',
             },
           };
+          return true;
+        });
+        if (!value) return { ok: false, errorCode: 'site_not_found' };
+        return snapshotResponse('mutation');
+      }
+
+      case 'site:rename': {
+        if (!validateOrigin(request.origin) || !isSafeEnrollmentLabel(request.label)) {
+          return { ok: false, errorCode: 'invalid_request' };
+        }
+        const { value } = await repo.update((draft) => {
+          const site = draft.sites[request.origin];
+          if (!site) return false;
+          site.label = request.label;
+          site.updatedAt = new Date().toISOString();
           return true;
         });
         if (!value) return { ok: false, errorCode: 'site_not_found' };

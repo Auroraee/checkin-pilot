@@ -223,12 +223,14 @@ export function SiteCard({
             <strong title={site.origin}>{displayName}</strong>
             <StatusBadge tone={status.tone}>{t(status.key)}</StatusBadge>
           </div>
-          <span className="site-origin">{site.origin}</span>
-          <span className="site-meta">
-            {site.latestRecord
-              ? `${t('lastResult')}: ${formatDateTime(locale, site.latestRecord.attemptedAt)}`
-              : t('never')}
-          </span>
+          <div className="site-subline">
+            <span className="site-origin" title={site.origin}>{site.origin}</span>
+            <span className="site-meta">
+              {site.latestRecord
+                ? `${t('lastResult')}: ${formatDateTime(locale, site.latestRecord.attemptedAt)}`
+                : t('never')}
+            </span>
+          </div>
         </div>
         <Switch
           checked={site.enabled}
