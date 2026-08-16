@@ -8,15 +8,23 @@ import type {
 import type { PowSolveInput, PowSolveResult } from '../adapters/types';
 
 const OFFSCREEN_PATH = 'offscreen.html';
-let activeTaskId: string | undefined;
 let creationPromise: Promise<void> | undefined;
+/** Solves are serialized: a concurrent caller queues instead of failing. */
+let solveQueue: Promise<unknown> = Promise.resolve();
 
-export async function solvePowOffscreen(
+export function solvePowOffscreen(input: PowSolveInput): Promise<PowSolveResult> {
+  const task = solveQueue.then(() => solvePowOffscreenExclusive(input));
+  solveQueue = task.then(
+    () => undefined,
+    () => undefined,
+  );
+  return task;
+}
+
+async function solvePowOffscreenExclusive(
   input: PowSolveInput,
 ): Promise<PowSolveResult> {
-  if (activeTaskId !== undefined) return { status: 'error', elapsedMs: 0 };
   const taskId = crypto.randomUUID();
-  activeTaskId = taskId;
   let abortHandler: (() => void) | undefined;
   try {
     await ensureOffscreenDocument();
@@ -48,13 +56,8 @@ export async function solvePowOffscreen(
     if (abortHandler !== undefined) {
       input.signal?.removeEventListener('abort', abortHandler);
     }
-    activeTaskId = undefined;
     await closeOffscreenDocument();
   }
-}
-
-export async function cancelActivePow(): Promise<void> {
-  if (activeTaskId !== undefined) await cancelPowOffscreen(activeTaskId);
 }
 
 export async function cancelPowOffscreen(taskId: string): Promise<void> {
