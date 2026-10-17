@@ -30,3 +30,5 @@ jobs:
         with:
           name: checkin-pilot-chrome-mv3
           path: .output/*.zip
+          # `.output` is hidden, and v4 skips hidden paths by default.
+          include-hidden-files: true
