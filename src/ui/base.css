@@ -51,6 +51,32 @@
   box-sizing: border-box;
 }
 
+.today-overview {
+  display: grid;
+  gap: 9px;
+  padding: 13px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.today-heading,
+.today-counts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.today-heading { justify-content: space-between; }
+.today-heading > span { font-variant-numeric: tabular-nums; }
+.today-overview progress { width: 100%; height: 7px; accent-color: var(--color-accent); }
+.today-overview small,
+.site-detail { color: var(--color-muted); font-size: 11px; line-height: 1.6; }
+.site-detail { margin: 8px 0 0; overflow-wrap: anywhere; }
+.site-detail-error { color: var(--color-danger); }
+.site-actions { flex-wrap: wrap; }
+
 html {
   background: var(--color-canvas);
 }

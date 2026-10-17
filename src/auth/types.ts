@@ -20,6 +20,7 @@ export type TransportResult<T> =
 export interface CheckinSubmitOptions {
   powChallenge?: string;
   powNonce?: string;
+  checkinNonce?: string;
 }
 
 /**
@@ -44,6 +45,7 @@ export interface CheckinFlowPlan {
   turnstileCheck: boolean;
   maxPowAttempts: number;
   powMaxMs: number;
+  checkinSignature?: 'huaibao-sha256';
 }
 
 /** Fetch-bound operations used by the shared (legacy) flow implementation. */

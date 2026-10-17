@@ -33,7 +33,8 @@ export async function runCheckinFlowWithOps(
 
   if (!plan.powEnabled) {
     if (plan.turnstileCheck) return actionRequiredOutcome('turnstile');
-    return ops.submitCheckin({});
+    return ops.submitCheckin(plan.checkinSignature === 'huaibao-sha256' && current.value.checkinNonce !== undefined
+      ? { checkinNonce: current.value.checkinNonce } : {});
   }
 
   switch (plan.powMode) {

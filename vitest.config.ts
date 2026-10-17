@@ -23,6 +23,10 @@ export default defineConfig({
           environment: 'jsdom',
           include: ['tests/mock-e2e/**/*.test.ts'],
           setupFiles: ['tests/setup.ts'],
+          // Prebundling this package embeds a second React copy, which breaks
+          // hooks in the DOM-rendering tests. Inline it so it shares the
+          // external react/react-dom instance.
+          server: { deps: { inline: ['@phosphor-icons/react'] } },
         },
       },
     ],

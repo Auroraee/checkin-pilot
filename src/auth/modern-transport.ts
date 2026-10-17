@@ -34,6 +34,7 @@ export class ModernRefreshTransport implements AuthTransport {
       maxPowAttempts: plan.maxPowAttempts,
       powMaxMs: plan.powMaxMs,
       tabId: this.session.tabId,
+      ...(plan.checkinSignature ? { checkinSignature: plan.checkinSignature } : {}),
     };
     try {
       const raw = await this.session.run<Record<string, unknown>>(

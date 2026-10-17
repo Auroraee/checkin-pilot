@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import { isOffscreenRequest } from '../../src/pow/offscreen-controller';
 import type { StorageAreaLike } from '../../src/core/storage';
 
@@ -40,6 +41,8 @@ export interface RecordedRequest {
 export type PowSolverBehavior = 'solve' | 'timeout' | 'error';
 
 export interface MockServerConfig {
+  checkinNonce?: unknown;
+  requireCheckinSignature?: boolean;
   status?: Record<string, unknown> | 'fail' | 'html';
   refresh?: 'ok' | 'needs_login' | 'legacy_only' | 'network' | 'invalid' | 'get_only' | 'sw_needs_login';
   refreshAccount?: number;
@@ -198,7 +201,7 @@ class MockSiteServer {
           return Promise.resolve(jsonResponse({ success: true, data: { stats: {} } }));
         default:
           return Promise.resolve(
-            jsonResponse({ success: true, data: { stats: { checked_in_today: false } } }),
+            jsonResponse({ success: true, data: { stats: { checked_in_today: false }, checkin_nonce: cfg.checkinNonce } }),
           );
       }
     }
@@ -229,6 +232,16 @@ class MockSiteServer {
       }
     }
     if (url.pathname === '/api/user/checkin' && (init?.method ?? 'GET') === 'POST') {
+      if (cfg.requireCheckinSignature) {
+        const readHeader = (name: string) => new Headers(init?.headers).get(name);
+        const timestamp = readHeader('X-Checkin-Timestamp');
+        const account = cfg.refreshAccount ?? 7;
+        const expected = createHash('sha256').update(`${account}:${timestamp}:${cfg.checkinNonce}`).digest('hex');
+        if (!timestamp || !/^\d+$/.test(timestamp) || Math.abs(Number(timestamp) - Math.floor(Date.now() / 1000)) > 60 ||
+            readHeader('X-Checkin-Signature') !== expected || init?.body !== '{}') {
+          return Promise.resolve(jsonResponse({ success: false, message: 'Invalid check-in signature' }));
+        }
+      }
       switch (cfg.submit) {
         case 'pow_stale':
           return Promise.resolve(
@@ -285,6 +298,7 @@ export class MockBrowser {
   readonly permissionAddedListeners = new ListenerSet();
   private nextTabId = 1;
   readonly removedTabs: number[] = [];
+  badgeText = '';
   readonly createdTabs: Array<{ url: string; active: boolean }> = [];
   /** When true, scripting.executeScript rejects like a navigated-away tab. */
   tabGone = false;
@@ -386,6 +400,7 @@ export class MockBrowser {
       },
     },
     runtime: {
+      sendMessage: (message: unknown) => this.deliver({ from: 'sw', message, sender: {} }),
       onMessage: this.runtimeOnMessage,
       onInstalled: this.runtimeOnInstalled,
       onStartup: this.runtimeOnStartup,
@@ -427,7 +442,7 @@ export class MockBrowser {
       onAdded: this.permissionAddedListeners,
     },
     action: {
-      setBadgeText: async () => undefined,
+      setBadgeText: async ({ text }: { text: string }) => { this.badgeText = text; },
       setBadgeBackgroundColor: async () => undefined,
     },
     i18n: {
@@ -577,6 +592,7 @@ export class MockBrowser {
     this.localData.clear();
     this.sessionData.clear();
     this.removedTabs.length = 0;
+    this.badgeText = '';
     this.createdTabs.length = 0;
     this.tabGone = false;
     this.powBehavior = 'solve';

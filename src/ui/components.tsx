@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
+import { browser } from 'wxt/browser';
 import {
   AirplaneTakeoff,
   ArrowSquareOut,
@@ -11,7 +12,11 @@ import {
   WarningCircle,
   XCircle,
 } from '@phosphor-icons/react';
-import type { CheckinRecord, SiteView } from '../shared/domain';
+import type { CheckinRecord, SiteView, TodaySummary, TodayStatus } from '../shared/domain';
+import type { TranslationKey } from '../locales/translations';
+import { recoveryForSite } from './recovery';
+import { originPermissionPattern } from '../shared/url';
+import { errorTranslationKey } from './errors';
 import { useI18n } from './i18n';
 import {
   actionReasonTranslationKey,
@@ -187,6 +192,13 @@ function siteStatus(site: SiteView, running: boolean) {
     };
   }
   if (!site.enabled) return { key: 'disabled' as const, tone: 'neutral' as Tone };
+  if (site.today) {
+    const status = site.today.status;
+    if (status === 'attention' && site.today.record) {
+      return { key: recordOutcomeTranslationKey(site.today.record), tone: 'warning' as Tone };
+    }
+    return { key: todayStatusKeys[status], tone: todayStatusTone(status) };
+  }
   if (!site.latestRecord) return { key: 'statusReady' as const, tone: 'neutral' as Tone };
   return {
     key: recordOutcomeTranslationKey(site.latestRecord),
@@ -202,6 +214,7 @@ export function SiteCard({
   onManual,
   onOpen,
   onRemove,
+  onUpdate,
 }: {
   site: SiteView;
   running?: boolean;
@@ -210,10 +223,37 @@ export function SiteCard({
   onManual: () => void;
   onOpen: () => void;
   onRemove?: () => void;
+  onUpdate?: () => void;
 }) {
   const { locale, t } = useI18n();
   const displayName = getSiteDisplayName(site);
   const status = siteStatus(site, running);
+  const recovery = recoveryForSite(site);
+  const [recovering, setRecovering] = useState(false);
+  const [recoveryError, setRecoveryError] = useState<TranslationKey>();
+  const retry = site.today?.retry;
+  const retryDue = retry && Date.parse(retry.dueAt) <= Date.now();
+
+  const recover = async () => {
+    setRecoveryError(undefined);
+    if (recovery?.kind === 'permission') {
+      setRecovering(true);
+      try {
+        // Keep the permission request directly in the click's user gesture.
+        const granted = await browser.permissions.request({ origins: [originPermissionPattern(site.origin)] });
+        if (granted) onManual();
+        else setRecoveryError('errorPermission');
+      } catch {
+        setRecoveryError('errorPermission');
+      } finally {
+        setRecovering(false);
+      }
+    } else if (recovery?.kind === 'update') {
+      (onUpdate ?? onOpen)();
+    } else {
+      onOpen();
+    }
+  };
 
   return (
     <article className="site-card">
@@ -239,14 +279,30 @@ export function SiteCard({
           disabled={busy}
         />
       </div>
+      {retry ? (
+        <p className="site-detail" role="status">
+          {retryDue ? t('retryDue') : t('retryAt', { time: formatDateTime(locale, retry.dueAt) })}
+          {' · '}{t('retryRemaining', { count: retry.remaining })}
+        </p>
+      ) : null}
+      {recovery ? <p className="site-detail">{t(recovery.hint)}</p> : null}
+      {site.today?.record?.errorCode && !running ? (
+        <p className="site-detail">{t(errorTranslationKey(site.today.record.errorCode))}</p>
+      ) : null}
+      {recoveryError ? <p className="site-detail site-detail-error" role="alert">{t(recoveryError)}</p> : null}
       <div className="site-actions">
+        {recovery && recovery.kind !== 'retry' ? (
+          <Button onClick={() => void recover()} disabled={busy || running || recovering}>
+            {t(recovery.label)}
+          </Button>
+        ) : null}
         <Button
           variant="secondary"
           icon={<Play size={16} weight="fill" />}
           onClick={onManual}
-          disabled={busy || running}
+          disabled={busy || running || recovering}
         >
-          {running ? t('checking') : t('manualCheck')}
+          {running ? t('checking') : recovery ? t('recoverCheck') : t('manualCheck')}
         </Button>
         <IconButton label={t('openSite')} onClick={onOpen} disabled={busy}>
           <ArrowSquareOut size={18} />
@@ -264,16 +320,20 @@ export function SiteCard({
 export function ScheduleCard({
   nextBatchAt,
   state,
+  retrying = 0,
 }: {
   nextBatchAt: string | undefined;
   state: 'scheduled' | 'running' | 'complete' | undefined;
+  retrying?: number;
 }) {
   const { locale, t } = useI18n();
   const statusKey = state === 'running'
     ? 'scheduleRunning'
-    : state === 'complete'
-      ? 'scheduleComplete'
-      : 'schedulePending';
+    : retrying > 0
+      ? 'scheduleRetrying'
+      : state === 'complete'
+        ? 'scheduleComplete'
+        : 'schedulePending';
   return (
     <section className="schedule-card" aria-label={t('nextWindow')}>
       <div className="schedule-icon" aria-hidden="true"><Clock size={21} weight="fill" /></div>
@@ -282,6 +342,42 @@ export function ScheduleCard({
         <strong>{nextBatchAt ? formatDateTime(locale, nextBatchAt) : t(statusKey)}</strong>
         {nextBatchAt ? <small>{t(statusKey)}</small> : null}
       </div>
+    </section>
+  );
+}
+
+const todayStatusKeys: Record<TodayStatus, TranslationKey> = {
+  completed: 'done', retrying: 'statusRetrying', attention: 'statusActionRequired',
+  failed: 'statusFailed', unverified: 'statusUnverified', pending: 'todayPending',
+  running: 'running', paused: 'disabled',
+};
+
+function todayStatusTone(status: TodayStatus): Tone {
+  if (status === 'completed') return 'success';
+  if (status === 'failed') return 'danger';
+  if (status === 'attention') return 'warning';
+  if (status === 'retrying' || status === 'running') return 'accent';
+  return 'neutral';
+}
+
+export function TodayOverview({ summary }: { summary: TodaySummary }) {
+  const { t } = useI18n();
+  const statuses: TodayStatus[] = ['running', 'retrying', 'attention', 'failed', 'unverified', 'pending', 'paused'];
+  return (
+    <section className="today-overview" aria-label={t('todayOverview')} aria-live="polite">
+      <div className="today-heading">
+        <strong>{t('todayOverview')}</strong>
+        <span>{t('todayCompleted', { done: summary.completed, total: summary.total })}</span>
+      </div>
+      <progress max={Math.max(1, summary.total)} value={summary.completed} aria-label={t('todayOverview')} />
+      <div className="today-counts">
+        {statuses.filter((status) => summary[status] > 0).map((status) => (
+          <StatusBadge key={status} tone={todayStatusTone(status)}>
+            {t(todayStatusKeys[status])} {summary[status]}
+          </StatusBadge>
+        ))}
+      </div>
+      <small>{t('todayScope')}</small>
     </section>
   );
 }

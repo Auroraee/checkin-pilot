@@ -116,6 +116,8 @@ export interface CheckinRecord {
   retryCount: number;
   actionReason?: ActionReason;
   errorCode?: RedactedErrorCode;
+  /** Set only after Chrome accepts a notification for this result. */
+  notifiedAt?: string;
 }
 
 export interface DailySchedule {
@@ -197,7 +199,18 @@ export interface ProbeReport {
 export interface SiteView extends SiteConfig {
   latestRecord?: CheckinRecord;
   isPreviousBindingRecordExcluded: boolean;
+  today?: SiteToday;
 }
+
+export type TodayStatus = 'completed' | 'retrying' | 'attention' | 'failed' | 'unverified' | 'pending' | 'running' | 'paused';
+
+export interface SiteToday {
+  status: TodayStatus;
+  record?: CheckinRecord;
+  retry?: { dueAt: string; remaining: number };
+}
+
+export type TodaySummary = Record<TodayStatus, number> & { total: number };
 
 export interface AppSnapshot {
   settings: GlobalSettings;
@@ -207,4 +220,5 @@ export interface AppSnapshot {
   nextBatchAt?: string;
   scheduleDay: string;
   runningOrigins: string[];
+  today: TodaySummary;
 }

@@ -74,6 +74,8 @@ export type AdapterOperationResult<T> =
 
 export interface CheckinStatus {
   checkedInToday: boolean;
+  /** Transient per-request nonce, never part of a persisted result or probe report. */
+  checkinNonce?: string;
 }
 
 export interface PowChallenge {

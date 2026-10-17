@@ -1,20 +1,17 @@
 import { browser } from 'wxt/browser';
-import type { OutcomeCode } from '../shared/domain';
+import type { TodaySummary } from '../shared/domain';
 
-const badgeByOutcome: Partial<
-  Record<OutcomeCode, { text: string; color: string }>
-> = {
-  success: { text: '✓', color: '#087f5b' },
-  already_checked: { text: '✓', color: '#087f5b' },
-  action_required: { text: '!', color: '#b45309' },
-  failed: { text: '×', color: '#b42318' },
-  unverified: { text: '?', color: '#6b7280' },
-};
+export function badgeForToday(today: TodaySummary): { text: string; color: string } {
+  const problems = today.attention + today.failed;
+  if (problems) return { text: problems > 99 ? '99+' : String(problems), color: '#b42318' };
+  if (today.running || today.retrying) return { text: '…', color: '#b45309' };
+  if (today.unverified) return { text: '?', color: '#6b7280' };
+  if (today.total > 0 && today.completed === today.total) return { text: '✓', color: '#087f5b' };
+  return { text: '', color: '#6b7280' };
+}
 
-export async function setOutcomeBadge(outcome?: OutcomeCode): Promise<void> {
-  const badge = outcome ? badgeByOutcome[outcome] : undefined;
-  await browser.action.setBadgeText({ text: badge?.text ?? '' });
-  if (badge) {
-    await browser.action.setBadgeBackgroundColor({ color: badge.color });
-  }
+export async function setTodayBadge(today: TodaySummary): Promise<void> {
+  const badge = badgeForToday(today);
+  await browser.action.setBadgeBackgroundColor({ color: badge.color });
+  await browser.action.setBadgeText({ text: badge.text });
 }

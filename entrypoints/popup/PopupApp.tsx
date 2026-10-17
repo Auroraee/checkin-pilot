@@ -20,6 +20,7 @@ import {
   ScheduleCard,
   SiteCard,
   StatusBadge,
+  TodayOverview,
 } from '../../src/ui/components';
 import { errorTranslationKey } from '../../src/ui/errors';
 import {
@@ -37,6 +38,7 @@ import {
 } from '../../src/shared/pending-enrollment';
 import { useAppSnapshot } from '../../src/ui/useAppSnapshot';
 import { useI18n } from '../../src/ui/i18n';
+import { actionReasonTranslationKey } from '../../src/ui/format';
 
 type PendingEnrollment =
   | {
@@ -350,7 +352,7 @@ export function PopupApp() {
         : response.outcome.code === 'already_checked'
           ? t('alreadyChecked')
           : response.outcome.code === 'action_required'
-            ? t('challengeRequired')
+            ? t(actionReasonTranslationKey(response.outcome.actionReason))
             : response.outcome.code === 'unverified'
               ? t('statusUnverified')
               : t(errorTranslationKey(response.outcome.errorCode));
@@ -399,7 +401,9 @@ export function PopupApp() {
           <ScheduleCard
             nextBatchAt={snapshot.nextBatchAt}
             state={snapshot.currentSchedule?.state}
+            retrying={snapshot.today.retrying}
           />
+          <TodayOverview summary={snapshot.today} />
 
           {message ? (
             <InlineNotice tone={message.tone}>{message.text}</InlineNotice>
@@ -462,6 +466,9 @@ export function PopupApp() {
                     onToggle={(enabled) => void toggleSite(site.origin, enabled)}
                     onManual={() => void manualCheck(site.origin)}
                     onOpen={() => void browser.tabs.create({ url: site.origin })}
+                    onUpdate={() => activeOrigin === site.origin
+                      ? void addCurrentSite()
+                      : void browser.tabs.create({ url: site.origin })}
                   />
                 ))}
               </div>

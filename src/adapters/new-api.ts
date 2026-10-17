@@ -23,7 +23,9 @@ import type {
   FetchLike,
   PublicSiteStatus,
 } from './types';
-import type { CheckinFlowPlan } from '../auth/types';
+import type { CheckinFlowPlan, CheckinSubmitOptions } from '../auth/types';
+import { HUAIBAO_ORIGIN, huaibaoSignatureHeaders, isCheckinNonce } from './huaibao-signature';
+export type { CheckinSubmitOptions } from '../auth/types';
 
 export interface NewApiRequestContext {
   origin: string;
@@ -33,11 +35,6 @@ export interface NewApiRequestContext {
   authorization?: string;
   fetch?: FetchLike;
   signal?: AbortSignal;
-}
-
-export interface CheckinSubmitOptions {
-  powChallenge?: string;
-  powNonce?: string;
 }
 
 export function currentLocalMonth(now = new Date()): string {
@@ -133,7 +130,11 @@ export async function getCheckinStatus(
     }
     return {
       ok: true,
-      value: { checkedInToday: stats.checked_in_today },
+      value: {
+        checkedInToday: stats.checked_in_today,
+        ...(request.origin === HUAIBAO_ORIGIN && isCheckinNonce(data?.checkin_nonce)
+          ? { checkinNonce: data.checkin_nonce } : {}),
+      },
     };
   } catch (error) {
     return { ok: false, outcome: outcomeFromThrown(error, context.signal) };
@@ -156,9 +157,19 @@ export async function postCheckin(
   }
 
   try {
+    const init = requestInit('POST', context.signal, true, request.userId, request.authorization);
+    if (request.origin === HUAIBAO_ORIGIN) {
+      if (!isCheckinNonce(options.checkinNonce)) return failedOutcome('invalid_response');
+      const headers = new Headers(init.headers);
+      const signatureHeaders = await huaibaoSignatureHeaders(request.userId, options.checkinNonce);
+      for (const [name, value] of Object.entries(signatureHeaders)) headers.set(name, value);
+      headers.set('Content-Type', 'application/json');
+      init.headers = headers;
+      init.body = '{}';
+    }
     const response = await request.fetch(
       url,
-      requestInit('POST', context.signal, true, request.userId, request.authorization),
+      init,
     );
     const httpFailure = outcomeFromHttpStatus(response);
     if (httpFailure !== undefined) return httpFailure;
@@ -199,6 +210,7 @@ export async function runNewApiCheckin(
     turnstileCheck: publicStatus.value.turnstileCheck,
     maxPowAttempts: 0,
     powMaxMs: 0,
+    ...(context.origin === HUAIBAO_ORIGIN ? { checkinSignature: 'huaibao-sha256' as const } : {}),
   };
   return context.transport.runCheckinFlow(plan);
 }

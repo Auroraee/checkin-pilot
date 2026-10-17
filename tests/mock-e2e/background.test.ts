@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { webcrypto } from 'node:crypto';
 import { createDefaultState, STORAGE_KEY } from '../../src/shared/constants';
 import type {
   CheckinRecord,
@@ -117,6 +118,55 @@ beforeAll(() => {
 afterEach(() => {
   harness.reset();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+
+describe('Huainova signed check-ins', () => {
+  const origin = 'https://ai.huaibao.top';
+  const nonce = 'huaibao-transient-nonce';
+  const config = {
+    status: { success: true, data: { checkin_enabled: true, turnstile_check: false } },
+    checkinNonce: nonce, requireCheckinSignature: true,
+  };
+
+  it.each(['legacy', 'silent', 'page'] as const)('signs the %s transport and keeps nonce/signature out of stored results', async (mode) => {
+    vi.stubGlobal('crypto', webcrypto);
+    await startWith([site({ origin, authMode: mode === 'legacy' ? 'legacy-session' : 'same-origin-refresh' })], {
+      ...config, ...(mode === 'page' ? { refresh: 'sw_needs_login' } : {}),
+    });
+    harness.browser.grant(origin);
+    const response = await harness.manualCheckin(origin);
+    expect(response).toMatchObject({ ok: true, outcome: { code: 'success' } });
+    const submit = harness.server.requests.find((request) => request.method === 'POST' && request.url === '/api/user/checkin');
+    expect(submit).toBeDefined();
+    expect(headerValue(submit!, 'X-Checkin-Signature')).toMatch(/^[0-9a-f]{64}$/);
+    expect(submit?.from).toBe(mode === 'page' ? 'page' : 'sw');
+    const localOutputs = JSON.stringify([harness.state, harness.browser.messageLog, harness.browser.notifications, harness.browser.consoleLog, response]);
+    expect(localOutputs).not.toContain(nonce);
+    expect(localOutputs).not.toContain(headerValue(submit!, 'X-Checkin-Signature'));
+    harness.assertSentinelConfined();
+  });
+
+  it.each(['unchecked', 'checked'] as const)('does not submit without a nonce when status is %s', async (checkin) => {
+    await startWith([site({ origin })], { status: config.status, checkin });
+    harness.browser.grant(origin);
+    const response = await harness.manualCheckin(origin);
+    expect(response).toMatchObject({ ok: true, outcome: checkin === 'checked'
+      ? { code: 'already_checked' } : { code: 'failed', errorCode: 'invalid_response' } });
+    expect(harness.server.requests.some((request) => request.method === 'POST' && request.url === '/api/user/checkin')).toBe(false);
+  });
+
+  it('still stops for interactive verification and changed accounts', async () => {
+    await startWith([site({ origin })], { ...config, status: { success: true, data: { checkin_enabled: true, turnstile_check: true } } });
+    harness.browser.grant(origin);
+    expect(await harness.manualCheckin(origin)).toMatchObject({ outcome: { code: 'action_required', actionReason: 'turnstile' } });
+    expect(harness.server.requests.some((request) => request.method === 'POST' && request.url === '/api/user/checkin')).toBe(false);
+
+    await startWith([site({ origin, authMode: 'same-origin-refresh' })], { ...config, refreshAccount: 8 });
+    harness.browser.grant(origin);
+    expect(await harness.manualCheckin(origin)).toMatchObject({ outcome: { code: 'action_required', actionReason: 'account_changed' } });
+    expect(harness.server.requests.some((request) => request.method === 'POST' && request.url === '/api/user/checkin')).toBe(false);
+  });
 });
 
 describe('legacy-session sites', () => {
@@ -430,6 +480,66 @@ describe('runanytime private PoW', () => {
 });
 
 describe('retry notifications', () => {
+  it('keeps the aggregate badge when opening the popup and clears stale success on a new day', async () => {
+    const second = site({ origin: RUNANYTIME });
+    await startWith([site(), second]);
+    const state = harness.state as StorageState;
+    state.records = [record({ outcome: 'failed', errorCode: 'network' }), record({ origin: RUNANYTIME, outcome: 'success' })];
+    await seedState(state);
+    await harness.browser.sendToBackground({ type: 'snapshot:get' });
+    expect(harness.browser.badgeText).toBe('1');
+    state.records = [record({ outcome: 'success' }), record({ origin: RUNANYTIME, outcome: 'success' })];
+    await seedState(state);
+    await harness.browser.sendToBackground({ type: 'snapshot:get' });
+    expect(harness.browser.badgeText).toBe('✓');
+    state.records = state.records.map((item) => ({ ...item, scheduleDay: '2000-01-01' }));
+    await seedState(state);
+    await harness.browser.sendToBackground({ type: 'snapshot:get' });
+    expect(harness.browser.badgeText).toBe('');
+  });
+
+  it('notifies exactly once after consecutive identical failures, and exposes each retry', async () => {
+    const job = retryJob({ id: 'first-retry', retryCount: 1 });
+    await startWithRetry(job);
+    const initial = harness.state as StorageState;
+    initial.records = [record({ outcome: 'failed', errorCode: 'server_error', trigger: 'scheduled' })];
+    await seedState(initial);
+    fireRetryAlarm(job.id);
+    await waitFor(() => (harness.state as StorageState).retries.some((candidate) => candidate.retryCount === 2));
+    await waitFor(() => harness.browser.messageLog.filter((entry) =>
+      (entry.message as { type?: string }).type === 'snapshot:changed').length >= 2);
+    expect(harness.browser.notifications).toHaveLength(0);
+    const snapshot = await harness.browser.sendToBackground({ type: 'snapshot:get' }) as { snapshot: { today: { retrying: number }; sites: Array<{ today: { retry: { remaining: number } } }> } };
+    expect(snapshot.snapshot.today.retrying).toBe(1);
+    expect(snapshot.snapshot.sites[0]?.today.retry.remaining).toBe(1);
+
+    const next = harness.state as StorageState;
+    const lastJob = next.retries[0]!;
+    lastJob.dueAt = new Date(Date.now() - 1_000).toISOString();
+    await seedState(next);
+    fireRetryAlarm(lastJob.id);
+    await waitFor(() => (harness.state as StorageState).records.some((item) => item.notifiedAt !== undefined));
+    await waitFor(() => harness.browser.messageLog.filter((entry) =>
+      (entry.message as { type?: string }).type === 'snapshot:changed').length >= 4);
+    expect(harness.browser.notifications).toHaveLength(1);
+    expect((harness.state as StorageState).retries).toHaveLength(0);
+    await harness.manualCheckin(PANEL);
+    expect(harness.browser.notifications).toHaveLength(1);
+    harness.assertSentinelConfined();
+  });
+
+  it('clears pending retries when a manual check succeeds or the site is paused', async () => {
+    await startWithRetry(retryJob({ retryCount: 1 }));
+    harness.server.setConfig({ submit: 'success', status: { success: true, data: { checkin_enabled: true } } });
+    successResponse(await harness.manualCheckin(PANEL));
+    expect((harness.state as StorageState).retries).toHaveLength(0);
+    const state = harness.state as StorageState;
+    state.retries = [retryJob()];
+    await seedState(state);
+    successResponse(await harness.browser.sendToBackground({ type: 'site:set-enabled', origin: PANEL, enabled: false }));
+    expect((harness.state as StorageState).retries).toHaveLength(0);
+  });
+
   function retryJob(overrides: Partial<RetryJob> = {}): RetryJob {
     return {
       id: `${PANEL}:${TODAY}:generation-a:2`,

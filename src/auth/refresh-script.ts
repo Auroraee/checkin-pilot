@@ -29,6 +29,7 @@ export interface ModernScriptPlan {
   maxPowAttempts: number;
   powMaxMs: number;
   tabId: number;
+  checkinSignature?: 'huaibao-sha256';
 }
 
 export type ModernScriptRawResult = Record<string, unknown>;
@@ -103,7 +104,9 @@ export function modernAuthScript(
       if (scriptPlan.turnstileCheck) {
         return { code: 'action_required', actionReason: 'turnstile', retryable: false };
       }
-      return submit(refreshed.auth, refreshed.account, {});
+      return submit(refreshed.auth, refreshed.account,
+        scriptPlan.checkinSignature === 'huaibao-sha256' && current.checkinNonce !== undefined
+          ? { checkinNonce: current.checkinNonce } : {});
     }
 
     switch (scriptPlan.powMode) {
@@ -301,7 +304,12 @@ export function modernAuthScript(
     if (typeof stats !== 'object' || stats === null || typeof stats.checked_in_today !== 'boolean') {
       return { kind: 'invalid_response' };
     }
-    return { kind: 'ok', checked: stats.checked_in_today };
+    return {
+      kind: 'ok', checked: stats.checked_in_today,
+      ...(plan.checkinSignature === 'huaibao-sha256' &&
+          typeof data?.checkin_nonce === 'string' && data.checkin_nonce.length > 0 && data.checkin_nonce.length <= 4096
+        ? { checkinNonce: data.checkin_nonce } : {}),
+    };
   }
 
   async function challenge(
@@ -365,7 +373,7 @@ export function modernAuthScript(
   async function submit(
     auth: string,
     account: number,
-    options: { powChallenge?: string; powNonce?: string },
+    options: { powChallenge?: string; powNonce?: string; checkinNonce?: string },
   ): Promise<ModernScriptRawResult> {
     let url = '/api/user/checkin';
     if (options.powChallenge !== undefined && options.powNonce !== undefined) {
@@ -377,13 +385,30 @@ export function modernAuthScript(
         encodeURIComponent(options.powNonce);
     }
     let response: Response;
+    const headers = authHeaders(auth, account);
+    if (plan.checkinSignature === 'huaibao-sha256') {
+      const nonce = options.checkinNonce;
+      if (typeof nonce !== 'string' || nonce.length === 0 || nonce.length > 4096) {
+        return { code: 'failed', errorCode: 'invalid_response', retryable: false };
+      }
+      try {
+        const timestamp = Math.floor(Date.now() / 1000).toString();
+        const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${account}:${timestamp}:${nonce}`));
+        headers['X-Checkin-Timestamp'] = timestamp;
+        headers['X-Checkin-Signature'] = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+        headers['Content-Type'] = 'application/json';
+      } catch {
+        return { code: 'failed', errorCode: 'unknown', retryable: false };
+      }
+    }
     try {
       response = await fetch(url, {
         method: 'POST',
         credentials: 'include',
         cache: 'no-store',
         redirect: 'manual',
-        headers: authHeaders(auth, account),
+        headers,
+        ...(plan.checkinSignature === 'huaibao-sha256' ? { body: '{}' } : {}),
       });
     } catch {
       return { code: 'failed', errorCode: 'network', retryable: true };
@@ -595,7 +620,7 @@ type RefreshRaw =
   | { kind: 'invalid_response' };
 
 type StatusRaw =
-  | { kind: 'ok'; checked: boolean }
+  | { kind: 'ok'; checked: boolean; checkinNonce?: string }
   | { kind: 'already_checked' }
   | { kind: 'needs_login' }
   | { kind: 'network' }

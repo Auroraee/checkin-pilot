@@ -91,7 +91,7 @@ export async function notifyForOutcome(
   outcome: NormalizedOutcome,
   settings: GlobalSettings,
   willRetry = false,
-): Promise<void> {
+): Promise<boolean> {
   const copy = copyForCurrentLocale();
   let title: string | undefined;
   let message: string | undefined;
@@ -111,7 +111,7 @@ export async function notifyForOutcome(
   }
   // 'unverified' (visit mode) is a terminal result but never notifies.
 
-  if (!title || !message) return;
+  if (!title || !message) return false;
 
   await browser.notifications.create(notificationId(site.origin), {
     type: 'basic',
@@ -119,6 +119,7 @@ export async function notifyForOutcome(
     title,
     message: `${site.label}: ${message}`,
   });
+  return true;
 }
 
 /** One-time migration notice telling the user to update the login method. */

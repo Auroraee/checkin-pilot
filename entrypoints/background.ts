@@ -18,7 +18,8 @@ import {
   notifyForOutcome,
   registerNotificationNavigation,
 } from '../src/background/notifications';
-import { setOutcomeBadge } from '../src/background/badge';
+import { setTodayBadge } from '../src/background/badge';
+import { buildTodayOverview } from '../src/core/overview';
 import { safeLog } from '../src/background/redaction';
 import {
   isSafeEnrollmentLabel,
@@ -44,7 +45,7 @@ import {
   markScheduleRunning,
   type ScheduleWakeCause,
 } from '../src/core/schedule';
-import { buildSiteViews, hasSuccessfulCheckinToday, removeSite } from '../src/core/sites';
+import { hasSuccessfulCheckinToday, removeSite } from '../src/core/sites';
 import { createStateRepository } from '../src/core/storage';
 import { localMonthQuery, localScheduleDay } from '../src/core/time';
 import { solvePowOffscreen } from '../src/pow/offscreen-client';
@@ -55,6 +56,7 @@ import {
   POW_MIN_DIFFICULTY,
   RETRY_ALARM_PREFIX,
   SCHEDULE_ALARM_PREFIX,
+  STORAGE_KEY,
 } from '../src/shared/constants';
 import type {
   AppSnapshot,
@@ -90,6 +92,18 @@ export default defineBackground(() => {
   /** Per-session task ids already routed, to reject replays. */
   const pagePowTaskIds = new Map<number, Set<string>>();
   let pumping = false;
+  let badgeUpdates: Promise<void> = Promise.resolve();
+
+  function refreshBadge(): Promise<void> {
+    badgeUpdates = badgeUpdates.catch(() => undefined).then(async () => {
+      await setTodayBadge(buildTodayOverview(await repo.read(), runningOrigins).today);
+    }).catch(() => undefined);
+    return badgeUpdates;
+  }
+
+  function notifyViews(): void {
+    void browser.runtime.sendMessage({ target: 'ui', type: 'snapshot:changed' }).catch(() => undefined);
+  }
 
   /** repo.update mutators receive a draft clone; helpers return fresh states. */
   function replaceState(draft: StorageState, next: StorageState): void {
@@ -102,7 +116,7 @@ export default defineBackground(() => {
     const schedule = state.schedules[scheduleDay];
     const snapshot: AppSnapshot = {
       settings: state.settings,
-      sites: buildSiteViews(state),
+      ...buildTodayOverview(state, runningOrigins, scheduleDay),
       records: state.records,
       scheduleDay,
       runningOrigins: [...runningOrigins],
@@ -119,6 +133,7 @@ export default defineBackground(() => {
   async function snapshotResponse(
     type: 'snapshot' | 'mutation' | 'batch',
   ): Promise<AppResponse> {
+    await refreshBadge();
     return { ok: true, type, snapshot: buildSnapshot(await repo.read()) };
   }
 
@@ -242,6 +257,8 @@ export default defineBackground(() => {
       return { code: 'failed', errorCode: 'unknown', retryable: false };
     }
     runningOrigins.add(origin);
+    notifyViews();
+    void refreshBadge();
     const startedAt = Date.now();
     const attemptDay = localScheduleDay();
     let pageTabId: number | undefined;
@@ -302,12 +319,13 @@ export default defineBackground(() => {
 
       const durationMs = Date.now() - startedAt;
       let retryScheduled = false;
+      const recordId = crypto.randomUUID();
       await repo.update((draft) => {
         const current = draft.sites[origin];
-        if (!current) return;
+        if (!current || current.binding.generation !== site.binding.generation) return;
 
         const record: CheckinRecord = {
-          id: crypto.randomUUID(),
+          id: recordId,
           origin,
           bindingGeneration: current.binding.generation,
           scheduleDay: attemptDay,
@@ -341,7 +359,12 @@ export default defineBackground(() => {
         }
 
         const retryBase = trigger === 'retry' ? originalTrigger : trigger;
-        if (retryBase !== undefined && retryBase !== 'manual' && completedRetries < 2) {
+        // A terminal result supersedes pending retries. A running retry replaces
+        // its consumed job atomically, so the UI never shows two next attempts.
+        if (!outcome.retryable || trigger !== 'manual') {
+          draft.retries = draft.retries.filter((job) => job.origin !== origin);
+        }
+        if (current.enabled && retryBase !== undefined && retryBase !== 'manual' && completedRetries < 2) {
           const job = createRetryJob({
             origin,
             bindingGeneration: current.binding.generation,
@@ -356,6 +379,7 @@ export default defineBackground(() => {
             scheduleRetryAlarm(job.id, job.dueAt);
           }
         }
+        retryScheduled = draft.retries.some((job) => job.origin === origin);
       });
 
       const settings = (await repo.read()).settings;
@@ -363,15 +387,23 @@ export default defineBackground(() => {
       const alreadyNotified = priorRecords.some(
         (record) =>
           record.origin === origin &&
+          record.bindingGeneration === site.binding.generation &&
+          record.notifiedAt !== undefined &&
           record.scheduleDay === attemptDay &&
           record.outcome === outcome.code &&
           record.actionReason === outcome.actionReason &&
           record.errorCode === outcome.errorCode,
       );
-      if (!alreadyNotified) {
-        await notifyForOutcome(site, outcome, settings, retryScheduled).catch(() => undefined);
+      const currentSite = (await repo.read()).sites[origin];
+      if (!alreadyNotified && currentSite?.binding.generation === site.binding.generation) {
+        const notified = await notifyForOutcome(site, outcome, settings, retryScheduled).catch(() => false);
+        if (notified) {
+          await repo.update((draft) => {
+            const record = draft.records.find((candidate) => candidate.id === recordId);
+            if (record) record.notifiedAt = new Date().toISOString();
+          });
+        }
       }
-      await setOutcomeBadge(outcome.code).catch(() => undefined);
       safeLog('info', 'checkin', {
         origin,
         trigger,
@@ -389,6 +421,8 @@ export default defineBackground(() => {
         pagePowTaskIds.delete(pageTabId);
       }
       runningOrigins.delete(origin);
+      notifyViews();
+      await refreshBadge();
     }
   }
 
@@ -568,6 +602,7 @@ export default defineBackground(() => {
       replaceState(draft, ensureDailySchedule(draft, now).state);
     });
     const scheduleDay = localScheduleDay(now);
+    await refreshBadge();
     const schedule = state.schedules[scheduleDay];
     if (!schedule) return;
 
@@ -631,7 +666,7 @@ export default defineBackground(() => {
       return;
     }
     const site = state.sites[job.origin];
-    if (!site || site.binding.generation !== job.bindingGeneration) {
+    if (!site || !site.enabled || site.binding.generation !== job.bindingGeneration) {
       await repo.update((draft) => {
         draft.retries = draft.retries.filter((candidate) => candidate.id !== jobId);
       });
@@ -848,6 +883,7 @@ export default defineBackground(() => {
           const site = draft.sites[request.origin];
           if (!site) return false;
           site.enabled = request.enabled === true;
+          if (!site.enabled) draft.retries = draft.retries.filter((job) => job.origin !== request.origin);
           site.updatedAt = new Date().toISOString();
           return true;
         });
@@ -1008,15 +1044,18 @@ export default defineBackground(() => {
       },
     });
     if (response.ok) {
-      // In-browser feedback only: a toolbar badge now, plus the marker stays
-      // so a reopened popup shows the "site enabled" notice and clears it.
-      await setOutcomeBadge('success').catch(() => undefined);
+      // Refresh the aggregate badge; the marker lets a reopened popup show
+      // the enrollment notice without treating enrollment as a check-in.
+      await refreshBadge();
     } else {
       await clearPendingEnrollment();
     }
   }
 
   browser.permissions.onAdded.addListener(() => void resumeEnrollmentAfterGrant());
+  browser.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === 'local' && STORAGE_KEY in changes) void refreshBadge();
+  });
 
   browser.runtime.onMessage.addListener(
     (message: unknown, sender, sendResponse) => {

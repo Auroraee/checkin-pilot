@@ -180,6 +180,9 @@ function sanitizeRecord(value: unknown): CheckinRecord | undefined {
     retryCount: Number(value.retryCount),
   };
   if (typeof value.reward === 'string') sanitized.reward = value.reward;
+  if (typeof value.notifiedAt === 'string' && Number.isFinite(Date.parse(value.notifiedAt))) {
+    sanitized.notifiedAt = value.notifiedAt;
+  }
   const actionReason = optionalKnownString(value.actionReason, ACTION_REASONS);
   if (actionReason) sanitized.actionReason = actionReason;
   const errorCode = optionalKnownString(value.errorCode, ERROR_CODES);

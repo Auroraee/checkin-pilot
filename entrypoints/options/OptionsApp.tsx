@@ -22,9 +22,10 @@ import {
   SiteCard,
   StatusBadge,
   Switch,
+  TodayOverview,
 } from '../../src/ui/components';
 import { errorTranslationKey } from '../../src/ui/errors';
-import { getSiteDisplayName, minutesToTimeInput, timeInputToMinutes } from '../../src/ui/format';
+import { actionReasonTranslationKey, getSiteDisplayName, minutesToTimeInput, timeInputToMinutes } from '../../src/ui/format';
 import { useI18n } from '../../src/ui/i18n';
 import { useAppSnapshot } from '../../src/ui/useAppSnapshot';
 
@@ -132,7 +133,7 @@ export function OptionsApp() {
         text: successful
           ? response.outcome.code === 'already_checked' ? t('alreadyChecked') : t('success')
           : response.outcome.code === 'action_required'
-            ? t('challengeRequired')
+            ? t(actionReasonTranslationKey(response.outcome.actionReason))
             : response.outcome.code === 'unverified'
               ? t('statusUnverified')
               : t(errorTranslationKey(response.outcome.errorCode)),
@@ -170,12 +171,14 @@ export function OptionsApp() {
           <ScheduleCard
             nextBatchAt={snapshot.nextBatchAt}
             state={snapshot.currentSchedule?.state}
+            retrying={snapshot.today.retrying}
           />
         ) : null}
       </div>
 
       {loading ? <LoadingState /> : snapshot ? (
         <div className="options-content">
+          <TodayOverview summary={snapshot.today} />
           {notice ? <InlineNotice tone={notice.tone}>{notice.text}</InlineNotice> : null}
           {snapshotError ? <InlineNotice tone="danger">{t(errorTranslationKey(snapshotError))}</InlineNotice> : null}
 
