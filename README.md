@@ -4,7 +4,7 @@
 
 CheckinPilot is a Chrome extension that automatically claims the daily check-in reward on the AI API panel sites you choose. Set it up once, open Chrome as usual, and CheckinPilot checks you in every day — no passwords to paste, no scripts to run.
 
-> Status: early release (`v0.1.0-rc`). The only fully verified site so far is [`https://runanytime.hxi.me`](https://runanytime.hxi.me).
+> Status: early release (`v0.2.0`). The only fully verified site so far is [`https://runanytime.hxi.me`](https://runanytime.hxi.me).
 
 ## Highlights
 
@@ -50,6 +50,15 @@ Done — this site is now checked in automatically every day. Repeat the same st
 - Sites are checked one by one; a site you already checked in manually today is skipped.
 - You are notified only when something needs your attention (for example, you got logged out) or when a check-in ultimately fails. Success notifications are optional and off by default.
 
+## Progress and recovery
+
+- The popup and options page show today's completed count, pending retries, action required, failures, unverified visits, and incomplete sites. Counts use the local date and current bound account. Paused sites are excluded, while sites disabled for a login-method upgrade still need attention.
+- Each pending retry shows its next time and maximum remaining attempts. A finished scheduled batch does not mean every site succeeded. Pausing a site clears its retries; a successful manual check also cancels pending retries.
+- Use **Open sign-in**, then return and select **Check again**. For missing permissions, use **Grant access**; if the prompt closes the popup, reopen it and check again.
+- **Update binding** uses the existing update flow. If it opens the website, select **Update current site** in the extension popup on that page. A changed account still requires explicit confirmation.
+- Complete interactive verification on the website, then check its result from the extension.
+- The toolbar badge summarizes all sites: a number for failures or action required, an ellipsis for running work or retries, a question mark for unverified visits, and a check mark when all included sites have completed. Opening the popup does not dismiss unresolved issues.
+
 ## Changing settings
 
 Click the gear icon in the CheckinPilot popup (or right-click the extension icon → **Options**):
@@ -68,6 +77,7 @@ Pausing a site stops its automatic check-ins but keeps it configured, so you can
 | Site / platform | Status |
 | --- | --- |
 | [`https://runanytime.hxi.me`](https://runanytime.hxi.me) | ✅ Verified — fully automatic check-in, including its proof-of-work step. |
+| [`https://ai.huaibao.top`](https://ai.huaibao.top) | Dedicated signature support added; mock tests pass, live check-in pending. See the [protocol notes](docs/sites/ai.huaibao.top.md). |
 | New API panels with the classic session login | ⚠️ Auto-detected — usually works; compatibility is verified per site at runtime. |
 | Token-only New API logins, official Sub2API | ❌ Not supported. |
 
